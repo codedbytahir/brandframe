@@ -9,7 +9,7 @@ Emits JSONL to stdout for SSE consumption by Next.js.
 Step order:
   1. probe        — ffprobe source metadata
   2. transcode    — ffmpeg HLS ladder + poster
-  3. asr          — faster-whisper (local CPU, free, no API key)
+  3. asr          — Deepgram Nova-3 API (free $200 credit, no credit card)
   4. scenes       — PySceneDetect + keyframe extraction
   5. vl-caption   — Mistral Pixtral (vision, per keyframe)
   6. chunk        — NLTK sentence + scene-boundary packing
@@ -23,8 +23,9 @@ Step order:
 🔑 REQUIRED free keys (no credit card needed):
   - MISTRAL_API_KEY → https://console.mistral.ai (free tier)
   - GEMINI_API_KEY  → https://aistudio.google.com (free, for AI image gen)
+  - DEEPGRAM_API_KEY → https://deepgram.com (free $200 credit, no card, for ASR)
 
-💡 Inpainting works even WITHOUT GEMINI_API_KEY: falls back to Pillow compositing (zero API).
+💡 Inpainting works even WITHOUT GEMINI_API_KEY: falls back to Pillow compositing.
 """
 
 import argparse
@@ -157,15 +158,23 @@ def step_transcode(video_id: str, b2_key: str, probe_result: StepResult) -> Step
 
 
 # =====================================================================
-# STEP 3 — ASR (faster-whisper)
+# STEP 3 — ASR (Deepgram API — free $200 credit, no card needed)
 # =====================================================================
 def step_asr(video_id: str, b2_key: str) -> StepResult:
     t0 = time.time()
     log("progress", step="asr", status="running", progress=28,
-        message="Extracting audio for ASR...")
+        message="Extracting audio for ASR via Deepgram...")
+
+    api_key = os.environ.get("DEEPGRAM_API_KEY", "")
+    if not api_key:
+        return StepResult(step="asr", status="failed", provider="deepgram",
+                          error="DEEPGRAM_API_KEY not set. Get free key at https://deepgram.com (no credit card, $200 free credits)",
+                          duration_ms=int((time.time()-t0)*1000))
 
     local_src = workspace_path(video_id, "source.mp4")
     audio_path = workspace_path(video_id, "audio.wav")
+
+    download_from_b2(b2_key, local_src)
 
     subprocess.run([
         "ffmpeg", "-y", "-i", local_src,
@@ -174,65 +183,82 @@ def step_asr(video_id: str, b2_key: str) -> StepResult:
     ], capture_output=True, timeout=300)
 
     log("progress", step="asr", status="running", progress=32,
-        message="Running faster-whisper (large-v3)...")
+        message="Transcribing via Deepgram Nova-3...")
 
     try:
-        from faster_whisper import WhisperModel
-        model = WhisperModel("large-v3", device="cpu", compute_type="int8")
-        segments, info = model.transcribe(audio_path, language="en", word_timestamps=True)
+        import requests
+        with open(audio_path, "rb") as f:
+            audio_data = f.read()
+
+        resp = requests.post(
+            "https://api.deepgram.com/v1/listen?model=nova-3&language=en&punctuate=true&utterances=true",
+            headers={
+                "Authorization": f"Token {api_key}",
+                "Content-Type": "audio/wav",
+            },
+            data=audio_data,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+
+        channels = result.get("results", {}).get("channels", [{}])
+        if not channels:
+            raise RuntimeError("No channels in Deepgram response")
+
+        utterances = channels[0].get("detected_language", "")
+        alternatives = channels[0].get("alternatives", [{}])
+
+        words_data = alternatives[0].get("words", []) if alternatives else []
+
+        # Build segments from utterances
         asr_segments = []
-        for seg in segments:
+        for word in words_data:
             asr_segments.append({
-                "start_ms": int(seg.start * 1000),
-                "end_ms": int(seg.end * 1000),
-                "text": seg.text.strip(),
+                "start_ms": int(word.get("start", 0) * 1000),
+                "end_ms": int(word.get("end", 0) * 1000),
+                "text": word.get("word", ""),
             })
-        asr_json_path = workspace_path(video_id, "asr.json")
-        with open(asr_json_path, "w") as f:
-            json.dump(asr_segments, f)
 
-        asr_b2_key = f"tmp/{video_id}/asr.json"
-        upload_to_b2(asr_json_path, asr_b2_key)
+        # If we have utterances (sentence-level), use those instead
+        utterances_list = channels[0].get("utterances", [])
+        if utterances_list:
+            asr_segments = []
+            for utt in utterances_list:
+                asr_segments.append({
+                    "start_ms": int(utt.get("start", 0) * 1000),
+                    "end_ms": int(utt.get("end", 0) * 1000),
+                    "text": utt.get("transcript", "").strip(),
+                })
 
-        status = "success"
-        provider = "faster-whisper"
-        model_name = "large-v3"
+        # If no segments at all, build from words
+        if not asr_segments and words_data:
+            current_start = words_data[0].get("start", 0)
+            current_text = ""
+            for word in words_data:
+                current_text += word.get("word", "") + " "
+            asr_segments = [{
+                "start_ms": int(words_data[0].get("start", 0) * 1000),
+                "end_ms": int(words_data[-1].get("end", 0) * 1000),
+                "text": current_text.strip(),
+            }]
+
         log("progress", step="asr", status="completed", progress=40,
-            message=f"ASR: {len(asr_segments)} segments, "
-                    f"duration ≈ {info.duration:.1f}s")
+            message=f"Deepgram: {len(asr_segments)} segments transcribed")
+
+        result = StepResult(
+            step="asr", status="success", provider="deepgram", model="nova-3",
+            duration_ms=int((time.time() - t0) * 1000),
+            data={"segments_count": len(asr_segments), "segments": asr_segments},
+        )
+        return result
 
     except Exception as exc:
         log("progress", step="asr", status="failed", progress=35,
-            message=f"faster-whisper failed: {exc}")
-        log("progress", step="asr", status="running", progress=38,
-            message="Attempting faster-whisper with CPU-only mode...")
-        try:
-            from faster_whisper import WhisperModel
-            model = WhisperModel("tiny", device="cpu", compute_type="int8")
-            segments, info = model.transcribe(audio_path, language="en")
-            asr_segments = []
-            for seg in segments:
-                asr_segments.append({
-                    "start_ms": int(seg.start * 1000),
-                    "end_ms": int(seg.end * 1000),
-                    "text": seg.text.strip(),
-                })
-            status = "fallback"
-            provider = "faster-whisper"
-            model_name = "tiny"
-            log("progress", step="asr", status="completed", progress=40,
-                message=f"ASR (tiny fallback): {len(asr_segments)} segments")
-        except Exception as exc2:
-            return StepResult(step="asr", status="failed", provider="faster-whisper",
-                              error=f"ASR failed: {exc2}. Try: pip install faster-whisper",
-                              duration_ms=int((time.time()-t0)*1000))
-
-    result = StepResult(
-        step="asr", status=status, provider=provider, model=model_name,
-        duration_ms=int((time.time() - t0) * 1000),
-        data={"segments_count": len(asr_segments), "segments": asr_segments},
-    )
-    return result
+            message=f"Deepgram failed: {exc}")
+        return StepResult(step="asr", status="failed", provider="deepgram",
+                          error=f"Deepgram ASR failed: {exc}",
+                          duration_ms=int((time.time()-t0)*1000))
 
 
 # =====================================================================

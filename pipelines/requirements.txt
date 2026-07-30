@@ -3,8 +3,6 @@ genblaze-core>=0.3.8
 genblaze-s3>=0.3.0
 boto3>=1.35.0
 numpy>=1.26.0
-# ASR
-faster-whisper>=1.1.0
 # Scene detection
 scenedetect>=0.6.5
 # Vision
