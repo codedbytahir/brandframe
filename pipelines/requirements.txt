@@ -23,3 +23,5 @@ nltk>=3.9.0
 ffmpeg-python>=0.2.0
 # HTTP
 requests>=2.32.0
+# Google Gemini AI (for high-quality image generation)
+google-genai>=1.0.0

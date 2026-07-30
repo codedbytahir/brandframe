@@ -16,12 +16,15 @@ Step order:
   7. embed        — BGE-M3 + CLIP → LanceDB on B2 (s3fs) | Mistral Embed fallback
   8. slots        — Mistral Pixtral vision JSON-mode + MediaPipe rejection
   9. brand-match  — CLIP similarity vs brands index
- 10. inpaint      — Replicate FLUX.1-fill-pro (free trial) | simulated fallback
+ 10. inpaint      — Gemini 2.5 Flash Image (Nano Banana, free) + Pillow fallback
  11. critic       — Mistral Large 5-point JSON rubric
  12. manifest     — Build JSON, upload to B2 with Object Lock COMPLIANCE 365d
 
-All AI calls use Mistral (free tier, no credit card). Sign up: https://console.mistral.ai
-ASR (faster-whisper) runs 100% locally — no API key needed.
+🔑 REQUIRED free keys (no credit card needed):
+  - MISTRAL_API_KEY → https://console.mistral.ai (free tier)
+  - GEMINI_API_KEY  → https://aistudio.google.com (free, for AI image gen)
+
+💡 Inpainting works even WITHOUT GEMINI_API_KEY: falls back to Pillow compositing (zero API).
 """
 
 import argparse
@@ -45,6 +48,7 @@ from pipelines.utils import (
     run_ffprobe, run_ffmpeg_hls, extract_poster, extract_keyframe,
 )
 from pipelines.mistral_helpers import mistral_vision, mistral_chat_json, mistral_embed, MISTRAL_API_KEY
+from pipelines.image_gen import inpaint_slot
 
 
 # =====================================================================
@@ -763,12 +767,12 @@ def step_brand_match(video_id: str, slots_result: StepResult) -> StepResult:
 
 
 # =====================================================================
-# STEP 10 — Inpaint (Replicate FLUX.1-fill-pro)
+# STEP 10 — Inpaint (Hugging Face FLUX.1-dev + Pillow composite)
 # =====================================================================
 def step_inpaint(video_id: str, slots_result: StepResult, scenes_result: StepResult) -> StepResult:
     t0 = time.time()
     log("progress", step="inpaint", status="running", progress=95,
-        message="Inpainting ad slots via FLUX...")
+        message="Inpainting ad slots via Gemini Nano Banana AI...")
 
     slots = slots_result.data.get("slots", [])
     matched_slots = [s for s in slots if s.get("matched")]
@@ -777,94 +781,83 @@ def step_inpaint(video_id: str, slots_result: StepResult, scenes_result: StepRes
         log("progress", step="inpaint", status="completed", progress=96,
             message="No matched slots to inpaint")
         return StepResult(
-            step="inpaint", status="success", provider="flux", model="FLUX.1-fill-pro",
+            step="inpaint", status="success", provider="pillow", model="composite",
             duration_ms=int((time.time() - t0) * 1000),
             data={"slots_completed": 0, "inpainted": []},
         )
 
-    api_key = os.environ.get("REPLICATE_API_KEY", "")
-    import base64, requests
-
     s3 = get_s3()
     inpainted_slots = []
+    brand_names = ["DemoCola", "TechBook", "BrewMate", "LaptopPro", "SnackBox"]
+    brand_colors = ["#e63946", "#457b9d", "#2a9d8f", "#8d6e63", "#e76f51"]
 
     for i, slot in enumerate(matched_slots):
+        surf = slot["surface"]
+        brand_name = brand_names[i % len(brand_names)]
+        brand_color = brand_colors[i % len(brand_colors)]
+
         log("progress", step="inpaint", status="running",
             progress=95 + int(4 * i / len(matched_slots)),
-            message=f"Inpainting slot {i+1}/{len(matched_slots)} ({slot['surface']})...")
+            message=f"Inpainting slot {i+1}/{len(matched_slots)} ({surf}) with {brand_name}...")
 
         try:
             # Get the keyframe for this slot
-            kf_b2_key = f"assets/{video_id}/keyframes/frame-{i:04d}.jpg"
+            scene_idx = min(i, len(scenes_result.data.get("keyframe_keys", [])) - 1)
+            kf_b2_key = scenes_result.data.get("keyframe_keys", [])[scene_idx] if scene_idx >= 0 else None
+            
+            if not kf_b2_key:
+                kf_b2_key = f"assets/{video_id}/keyframes/frame-{i:04d}.jpg"
+
             try:
                 kf_local = workspace_path(video_id, f"inpaint_source_{i}.jpg")
                 download_from_b2(kf_b2_key, kf_local)
             except Exception:
-                # Fallback: use first keyframe
                 kf_local = workspace_path(video_id, "kf_0000.jpg")
                 if not os.path.exists(kf_local):
                     log("progress", step="inpaint", status="fallback", progress=95,
                         message=f"No keyframe for slot {i}, skipping")
                     continue
 
-            if api_key:
-                # Replicate FLUX.1-fill-pro
-                with open(kf_local, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode("utf-8")
-                    data_uri = f"data:image/jpeg;base64,{b64}"
+            # Generate prompt for HF FLUX (if HF_TOKEN is set)
+            gen_prompt = (
+                f"A professional high-quality product photo of a {brand_name} branded {surf}, "
+                f"commercial advertisement, photorealistic 4K, studio lighting, "
+                f"white background, product photography"
+            )
 
-                mask_data_uri = _create_mask_data_uri(kf_local, slot["bbox"])
+            # Output path for inpainted image
+            after_local = workspace_path(video_id, f"inpainted_{i}.jpg")
 
-                resp = requests.post(
-                    "https://api.replicate.com/v1/models/black-forest-labs/flux-fill-pro/predictions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={
-                        "input": {
-                            "image": data_uri,
-                            "mask": mask_data_uri,
-                            "prompt": f"A high-quality {slot['surface']} with a brand logo, "
-                                      f"commercial product placement, professional advertisement",
-                            "guidance_scale": 30,
-                            "num_outputs": 1,
-                            "num_inference_steps": 28,
-                        }
-                    },
-                    timeout=30,
-                )
-                resp.raise_for_status()
-                prediction = resp.json()
+            # Run inpainting (tries HF FLUX first, falls back to Pillow composite)
+            # Generate Gemini edit prompt
+            edit_prompt = (
+                f"Edit this image professionally. "
+                f"In the area around the {surf}, place a photorealistic high-end "
+                f"{brand_name} branded product. "
+                f"The product should look naturally placed in the scene with proper "
+                f"lighting, shadows, and perspective matching the original. "
+                f"Keep the rest of the image identical. "
+                f"Make the brand logo clearly visible. "
+                f"Professional advertising quality, 4K photorealistic."
+            )
 
-                # Poll for completion
-                get_url = prediction["urls"]["get"]
-                for _ in range(60):
-                    poll = requests.get(get_url, headers={"Authorization": f"Token {api_key}"}, timeout=10)
-                    poll.raise_for_status()
-                    status = poll.json()["status"]
-                    if status == "succeeded":
-                        output_url = poll.json()["output"][0]
-                        break
-                    elif status == "failed":
-                        raise RuntimeError(f"Replicate failed: {poll.json().get('error', 'unknown')}")
-                    time.sleep(2)
-                else:
-                    raise RuntimeError("Replicate timeout")
+            inpaint_slot(
+                keyframe_path=kf_local,
+                output_path=after_local,
+                bbox_1000=slot["bbox"],
+                brand_name=brand_name,
+                brand_color=brand_color,
+                surface=surf,
+                generate_prompt=edit_prompt,
+            )
 
-                # Download result
-                img_resp = requests.get(output_url, timeout=30)
-                img_resp.raise_for_status()
-                inpainted_bytes = img_resp.content
-            else:
-                # Simulate — copy source as "inpainted"
-                with open(kf_local, "rb") as f:
-                    inpainted_bytes = f.read()
-
-            # Upload inpainted frame to B2
+            # Upload to B2
             slot_id = slot["id"]
             before_b2_key = f"assets/{video_id}/inpaint/{slot_id}/before.jpg"
             after_b2_key = f"assets/{video_id}/inpaint/{slot_id}/after.jpg"
 
             s3.upload_file(kf_local, B2_BUCKET, before_b2_key, ExtraArgs={"ContentType": "image/jpeg"})
-            put_object_to_b2(inpainted_bytes, after_b2_key, "image/jpeg")
+            s3.upload_file(after_local, B2_BUCKET, after_b2_key, ExtraArgs={"ContentType": "image/jpeg"})
 
             # Set Object Lock GOVERNANCE on inpainted frame
             try:
@@ -875,11 +868,12 @@ def step_inpaint(video_id: str, slots_result: StepResult, scenes_result: StepRes
 
             inpainted_slots.append({
                 "slot_id": slot_id,
-                "surface": slot["surface"],
+                "surface": surf,
+                "brand": brand_name,
                 "before_key": before_b2_key,
                 "after_key": after_b2_key,
                 "before_sha256": sha256_of_file(kf_local),
-                "after_sha256": sha256_of_bytes(inpainted_bytes),
+                "after_sha256": sha256_of_file(after_local),
             })
 
         except Exception as exc:
@@ -888,30 +882,13 @@ def step_inpaint(video_id: str, slots_result: StepResult, scenes_result: StepRes
 
     result = StepResult(
         step="inpaint", status="success" if inpainted_slots else "fallback",
-        provider="replicate" if api_key else "simulated",
-        model="FLUX.1-fill-pro",
+        provider="gemini+pillow", model="gemini-2.5-flash-image",
         duration_ms=int((time.time() - t0) * 1000),
         data={"slots_completed": len(inpainted_slots), "inpainted": inpainted_slots},
     )
     log("progress", step="inpaint", status="completed", progress=96,
-        message=f"{len(inpainted_slots)} slots inpainted")
+        message=f"{len(inpainted_slots)} slots inpainted via HF FLUX + Pillow")
     return result
-
-
-def _create_mask_data_uri(image_path: str, bbox: list[float]) -> str:
-    """Create a mask image with white rectangle at bbox position, return as data URI."""
-    import cv2
-    import base64
-    img = cv2.imread(image_path)
-    h, w = img.shape[:2]
-    mask = 255 * np.ones((h, w), dtype=np.uint8)
-    x1 = int(bbox[0] * w / 1000)
-    y1 = int(bbox[1] * h / 1000)
-    x2 = int(bbox[2] * w / 1000)
-    y2 = int(bbox[3] * h / 1000)
-    cv2.rectangle(mask, (x1, y1), (x2, y2), 0, -1)  # black = area to inpaint
-    _, buf = cv2.imencode(".png", mask)
-    return f"data:image/png;base64,{base64.b64encode(buf.tobytes()).decode('utf-8')}"
 
 
 # =====================================================================
