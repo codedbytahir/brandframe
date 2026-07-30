@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { eq } from "drizzle-orm";
 import { getB2Client } from "@/lib/b2/client";
 import { uploadKey } from "@/lib/b2/paths";
-import { env } from "@/lib/env";
+import { env, isDemo } from "@/lib/env";
 import { shortId } from "@/lib/utils";
+import { db } from "@/lib/db";
+import { videos, users } from "@/lib/db/schema";
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,34 +17,70 @@ export async function POST(req: NextRequest) {
     if (!filename || !contentType) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
-
     if (!contentType.startsWith("video/")) {
       return NextResponse.json({ error: "Only video files are allowed" }, { status: 400 });
     }
-
     if (sizeBytes > 5 * 1024 * 1024 * 1024) {
       return NextResponse.json({ error: "File too large (max 5GB)" }, { status: 400 });
+    }
+
+    // Get or create demo user
+    let userId = "usr_demo001";
+    const existing = await db.select().from(users).where(eq(users.id, userId)).get();
+    if (!existing) {
+      await db.insert(users).values({
+        id: userId,
+        name: "Demo User",
+        email: "demo@brandframe.dev",
+        createdAt: new Date().toISOString(),
+      });
     }
 
     const videoId = shortId("vid");
     const key = uploadKey(videoId);
 
+    // Insert video record
+    await db.insert(videos).values({
+      id: videoId,
+      title: title || filename,
+      filename,
+      contentType,
+      sizeBytes,
+      status: "uploading",
+      b2Key: key,
+      userId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (isDemo) {
+      // In demo mode, return a fake upload URL
+      return NextResponse.json({
+        videoId,
+        uploadUrl: null,
+        key,
+        isDemo: true,
+        message: "Demo mode — video record created. Set B2 keys for real upload.",
+      });
+    }
+
+    // Generate presigned PUT URL
     const s3 = getB2Client();
     const command = new PutObjectCommand({
       Bucket: env.B2_BUCKET,
       Key: key,
       ContentType: contentType,
     });
-
     const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
 
     return NextResponse.json({
       videoId,
       uploadUrl: presignedUrl,
       key,
+      isDemo: false,
     });
   } catch (error) {
     console.error("Upload error:", error);
-    return NextResponse.json({ error: "Failed to create upload URL" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to create upload" }, { status: 500 });
   }
 }
