@@ -9,16 +9,19 @@ Emits JSONL to stdout for SSE consumption by Next.js.
 Step order:
   1. probe        — ffprobe source metadata
   2. transcode    — ffmpeg HLS ladder + poster
-  3. asr          — faster-whisper (NVIDIA Parakeet fallback)
+  3. asr          — faster-whisper (local CPU, free, no API key)
   4. scenes       — PySceneDetect + keyframe extraction
-  5. vl-caption   — GPT-4o-mini vision (per keyframe)
+  5. vl-caption   — Mistral Pixtral (vision, per keyframe)
   6. chunk        — NLTK sentence + scene-boundary packing
-  7. embed        — BGE-M3 + CLIP → LanceDB on B2 (s3fs)
-  8. slots        — GPT-4o vision JSON-mode + MediaPipe rejection
+  7. embed        — BGE-M3 + CLIP → LanceDB on B2 (s3fs) | Mistral Embed fallback
+  8. slots        — Mistral Pixtral vision JSON-mode + MediaPipe rejection
   9. brand-match  — CLIP similarity vs brands index
- 10. inpaint      — Replicate FLUX.1-fill-pro (OpenAI DALL-E fallback)
- 11. critic       — GPT-4o-mini 5-point rubric, retry once
+ 10. inpaint      — Replicate FLUX.1-fill-pro (free trial) | simulated fallback
+ 11. critic       — Mistral Large 5-point JSON rubric
  12. manifest     — Build JSON, upload to B2 with Object Lock COMPLIANCE 365d
+
+All AI calls use Mistral (free tier, no credit card). Sign up: https://console.mistral.ai
+ASR (faster-whisper) runs 100% locally — no API key needed.
 """
 
 import argparse
@@ -41,6 +44,7 @@ from pipelines.utils import (
     sha256_of_file, sha256_of_bytes, workspace_path, clean_workspace,
     run_ffprobe, run_ffmpeg_hls, extract_poster, extract_keyframe,
 )
+from pipelines.mistral_helpers import mistral_vision, mistral_chat_json, mistral_embed, MISTRAL_API_KEY
 
 
 # =====================================================================
@@ -194,38 +198,29 @@ def step_asr(video_id: str, b2_key: str) -> StepResult:
                     f"duration ≈ {info.duration:.1f}s")
 
     except Exception as exc:
-        log("progress", step="asr", status="fallback", progress=35,
-            message=f"faster-whisper failed ({exc}), trying OpenAI Whisper API...")
+        log("progress", step="asr", status="failed", progress=35,
+            message=f"faster-whisper failed: {exc}")
+        log("progress", step="asr", status="running", progress=38,
+            message="Attempting faster-whisper with CPU-only mode...")
         try:
-            import requests
-            api_key = os.environ.get("OPENAI_API_KEY", "")
-            if not api_key:
-                raise RuntimeError("No OPENAI_API_KEY for Whisper fallback")
-
-            with open(audio_path, "rb") as f:
-                resp = requests.post(
-                    "https://api.openai.com/v1/audio/transcriptions",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    files={"file": ("audio.wav", f, "audio/wav")},
-                    data={"model": "whisper-1", "response_format": "verbose_json",
-                          "timestamp_granularities": ["segment"]},
-                    timeout=120,
-                )
-            resp.raise_for_status()
-            data = resp.json()
-            asr_segments = [
-                {"start_ms": int(s["start"] * 1000), "end_ms": int(s["end"] * 1000),
-                 "text": s.get("text", "").strip()}
-                for s in data.get("segments", [])
-            ]
+            from faster_whisper import WhisperModel
+            model = WhisperModel("tiny", device="cpu", compute_type="int8")
+            segments, info = model.transcribe(audio_path, language="en")
+            asr_segments = []
+            for seg in segments:
+                asr_segments.append({
+                    "start_ms": int(seg.start * 1000),
+                    "end_ms": int(seg.end * 1000),
+                    "text": seg.text.strip(),
+                })
             status = "fallback"
-            provider = "openai"
-            model_name = "whisper-1"
+            provider = "faster-whisper"
+            model_name = "tiny"
             log("progress", step="asr", status="completed", progress=40,
-                message=f"ASR (OpenAI fallback): {len(asr_segments)} segments")
+                message=f"ASR (tiny fallback): {len(asr_segments)} segments")
         except Exception as exc2:
-            return StepResult(step="asr", status="failed", provider="whisper",
-                              error=f"All ASR methods failed: {exc2}",
+            return StepResult(step="asr", status="failed", provider="faster-whisper",
+                              error=f"ASR failed: {exc2}. Try: pip install faster-whisper",
                               duration_ms=int((time.time()-t0)*1000))
 
     result = StepResult(
@@ -309,19 +304,19 @@ def step_scenes(video_id: str, b2_key: str) -> StepResult:
 
 
 # =====================================================================
-# STEP 5 — VL Caption (GPT-4o-mini vision)
+# STEP 5 — VL Caption (Mistral Pixtral vision)
 # =====================================================================
 def step_vl_caption(video_id: str, scenes_result: StepResult) -> StepResult:
     t0 = time.time()
     log("progress", step="vl-caption", status="running", progress=57,
-        message="Captioning keyframes via GPT-4o-mini vision...")
+        message="Captioning keyframes via Mistral Pixtral vision...")
 
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        return StepResult(step="vl-caption", status="failed", provider="openai",
-                          error="No OPENAI_API_KEY", duration_ms=int((time.time()-t0)*1000))
+    try:
+        _ = MISTRAL_API_KEY
+    except RuntimeError:
+        return StepResult(step="vl-caption", status="failed", provider="mistral",
+                          error="MISTRAL_API_KEY not set", duration_ms=int((time.time()-t0)*1000))
 
-    import requests
     import base64
 
     scenes = scenes_result.data.get("scenes", [])
@@ -334,33 +329,18 @@ def step_vl_caption(video_id: str, scenes_result: StepResult) -> StepResult:
         log("progress", step="vl-caption", status="running", progress=57 + int(25 * i / len(scenes)),
             message=f"Captioning keyframe {i+1}/{len(scenes)}...")
         try:
-            # Download keyframe
             kf_local = workspace_path(video_id, f"kf_{sc['index']:04d}.jpg")
             download_from_b2(kf_key, kf_local)
 
             with open(kf_local, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode("utf-8")
 
-            resp = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": "Describe this video frame in 1-2 sentences. What objects, people, actions, and setting do you see? Be specific."},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"}},
-                            ],
-                        }
-                    ],
-                    "max_tokens": 150,
-                },
-                timeout=30,
+            caption = mistral_vision(
+                prompt="Describe this video frame in 1-2 sentences. What objects, people, actions, and setting do you see? Be specific.",
+                image_b64=b64,
+                model="pixtral-large-latest",
+                max_tokens=150,
             )
-            resp.raise_for_status()
-            caption = resp.json()["choices"][0]["message"]["content"].strip()
             captions.append({
                 "index": i,
                 "start_ms": sc["start_ms"],
@@ -379,12 +359,12 @@ def step_vl_caption(video_id: str, scenes_result: StepResult) -> StepResult:
             })
 
     result = StepResult(
-        step="vl-caption", status="success", provider="openai", model="gpt-4o-mini",
+        step="vl-caption", status="success", provider="mistral", model="pixtral-large-latest",
         duration_ms=int((time.time() - t0) * 1000),
         data={"captions_count": len(captions), "captions": captions},
     )
     log("progress", step="vl-caption", status="completed", progress=60,
-        message=f"{len(captions)} keyframes captioned")
+        message=f"{len(captions)} keyframes captioned via Mistral Pixtral")
     return result
 
 
@@ -581,26 +561,14 @@ def step_embed(video_id: str, chunk_result: StepResult) -> StepResult:
         model_name = "BAAI/bge-m3+clip-ViT-B-32"
     except Exception as exc:
         log("progress", step="embed", status="fallback", progress=75,
-            message=f"Local embedding failed ({exc}), using OpenAI...")
+            message=f"Local embedding failed ({exc}), using Mistral Embed API...")
         try:
-            import requests
-            api_key = os.environ.get("OPENAI_API_KEY", "")
-            if not api_key:
-                raise RuntimeError("No OPENAI_API_KEY")
-            resp = requests.post(
-                "https://api.openai.com/v1/embeddings",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={"model": "text-embedding-3-small", "input": texts, "dimensions": 512},
-                timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            dense_emb = [d["embedding"] for d in data["data"]]
+            dense_emb = mistral_embed(texts)
             status = "fallback"
-            provider = "openai"
-            model_name = "text-embedding-3-small"
+            provider = "mistral"
+            model_name = "mistral-embed"
             log("progress", step="embed", status="completed", progress=80,
-                message=f"OpenAI embeddings: {len(dense_emb)} vectors")
+                message=f"Mistral Embed API: {len(dense_emb)} vectors")
         except Exception as exc2:
             return StepResult(step="embed", status="failed", provider="embedding",
                               error=f"All embedding methods failed: {exc2}",
@@ -615,20 +583,18 @@ def step_embed(video_id: str, chunk_result: StepResult) -> StepResult:
 
 
 # =====================================================================
-# STEP 8 — Slot Detection (GPT-4o vision + MediaPipe)
+# STEP 8 — Slot Detection (Mistral Pixtral vision + MediaPipe)
 # =====================================================================
 def step_slots(video_id: str, scenes_result: StepResult) -> StepResult:
     t0 = time.time()
     log("progress", step="slots", status="running", progress=82,
-        message="Detecting in-scene ad slots via vision AI...")
+        message="Detecting in-scene ad slots via Mistral Pixtral vision...")
 
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        return StepResult(step="slots", status="failed", provider="openai",
-                          error="No OPENAI_API_KEY", duration_ms=int((time.time()-t0)*1000))
+    if not MISTRAL_API_KEY:
+        return StepResult(step="slots", status="failed", provider="mistral",
+                          error="MISTRAL_API_KEY not set", duration_ms=int((time.time()-t0)*1000))
 
     import base64
-    import requests
 
     scenes = scenes_result.data.get("scenes", [])
     keyframe_keys = scenes_result.data.get("keyframe_keys", [])
@@ -641,7 +607,7 @@ def step_slots(video_id: str, scenes_result: StepResult) -> StepResult:
     for i, (sc, kf_key) in enumerate(zip(scenes, keyframe_keys)):
         log("progress", step="slots", status="running",
             progress=82 + int(10 * i / len(scenes)),
-            message=f"Analyzing scene {i+1}/{len(scenes)} for slots...")
+            message=f"Analyzing scene {i+1}/{len(scenes)} for slots via Pixtral...")
 
         try:
             kf_local = workspace_path(video_id, f"kf_{sc['index']:04d}.jpg")
@@ -650,56 +616,37 @@ def step_slots(video_id: str, scenes_result: StepResult) -> StepResult:
             with open(kf_local, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode("utf-8")
 
-            resp = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": (
-                                        "You are a product placement detector. Examine this video frame.\n"
-                                        "Return a JSON array of inanimate objects that are suitable for "
-                                        "branded product placement. Allowed surfaces: mug, laptop_lid, "
-                                        "can, bottle, blank_sign, cereal_box, book_cover, screen.\n"
-                                        "For each object found, output: "
-                                        '{"surface": "<type>", "bbox": [x1, y1, x2, y2], '
-                                        '"confidence": 0-1}\n'
-                                        "Bbox is in 0-1000 normalized coordinates.\n"
-                                        "SKIP any objects near faces or hands.\n"
-                                        "Return ONLY valid JSON array, no markdown."
-                                    ),
-                                },
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"}},
-                            ],
-                        }
-                    ],
-                    "max_tokens": 300,
-                    "response_format": {"type": "json_object"},
-                },
-                timeout=30,
+            slot_prompt = (
+                "You are a product placement detector. Examine this video frame.\n"
+                "Return a JSON object with a key 'slots' containing an array of inanimate objects "
+                "suitable for branded product placement.\n"
+                "Allowed surfaces: mug, laptop_lid, can, bottle, blank_sign, cereal_box, book_cover, screen.\n"
+                'For each object: {"surface": "<type>", "bbox": [x1,y1,x2,y2], "confidence": 0-1}\n'
+                "Bbox is in 0-1000 normalized coordinates.\n"
+                "SKIP any objects near faces or hands.\n"
+                "Return ONLY valid JSON, no markdown."
             )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
 
-            # Try to extract JSON array
-            import re
-            json_match = re.search(r'\[.*?\]', content, re.DOTALL)
-            if json_match:
-                items = json.loads(json_match.group())
-                for item in items:
-                    if item.get("surface") in ALLOWED_SURFACES and item.get("confidence", 0) >= 0.5:
-                        detected_slots.append({
-                            "id": f"slot_{uuid.uuid4().hex[:8]}",
-                            "timestamp_ms": sc["midpoint_ms"],
-                            "surface": item["surface"],
-                            "bbox": item["bbox"],
-                            "confidence": item["confidence"],
-                        })
+            result = mistral_vision(
+                prompt=slot_prompt,
+                image_b64=b64,
+                model="pixtral-large-latest",
+                max_tokens=500,
+                response_format={"type": "json_object"},
+            )
+
+            # result is a dict from mistral_vision when response_format is set
+            items = result.get("slots", []) if isinstance(result, dict) else []
+
+            for item in items:
+                if item.get("surface") in ALLOWED_SURFACES and item.get("confidence", 0) >= 0.5:
+                    detected_slots.append({
+                        "id": f"slot_{uuid.uuid4().hex[:8]}",
+                        "timestamp_ms": sc["midpoint_ms"],
+                        "surface": item["surface"],
+                        "bbox": item["bbox"],
+                        "confidence": item["confidence"],
+                    })
         except Exception as exc:
             log("progress", step="slots", status="running", progress=82,
                 message=f"Slot detection warning for scene {i}: {exc}")
@@ -723,7 +670,6 @@ def step_slots(video_id: str, scenes_result: StepResult) -> StepResult:
             if img is None:
                 continue
             h, w = img.shape[:2]
-            # Convert bbox from 0-1000 to pixel coords
             x1 = int(slot["bbox"][0] * w / 1000)
             y1 = int(slot["bbox"][1] * h / 1000)
             x2 = int(slot["bbox"][2] * w / 1000)
@@ -751,12 +697,12 @@ def step_slots(video_id: str, scenes_result: StepResult) -> StepResult:
             message=f"MediaPipe unavailable ({exc}), skipping rejection")
 
     result = StepResult(
-        step="slots", status="success", provider="openai", model="gpt-4o-mini",
+        step="slots", status="success", provider="mistral", model="pixtral-large-latest",
         duration_ms=int((time.time() - t0) * 1000),
         data={"slots_count": len(detected_slots), "slots": detected_slots},
     )
     log("progress", step="slots", status="completed", progress=92,
-        message=f"{len(detected_slots)} ad slots detected")
+        message=f"{len(detected_slots)} ad slots detected via Pixtral")
     return result
 
 
@@ -969,27 +915,24 @@ def _create_mask_data_uri(image_path: str, bbox: list[float]) -> str:
 
 
 # =====================================================================
-# STEP 11 — Critic (GPT-4o-mini rubric)
+# STEP 11 — Critic (Mistral Large JSON rubric)
 # =====================================================================
 def step_critic(video_id: str, inpaint_result: StepResult) -> StepResult:
     t0 = time.time()
     log("progress", step="critic", status="running", progress=97,
-        message="Running AI critic on inpainted slots...")
+        message="Running AI critic on inpainted slots via Mistral Large...")
 
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        return StepResult(step="critic", status="failed", provider="openai",
-                          error="No OPENAI_API_KEY", duration_ms=int((time.time()-t0)*1000))
+    if not MISTRAL_API_KEY:
+        return StepResult(step="critic", status="failed", provider="mistral",
+                          error="MISTRAL_API_KEY not set", duration_ms=int((time.time()-t0)*1000))
 
-    import base64, requests
-    import re as regex
+    import base64
 
     inpainted = inpaint_result.data.get("inpainted", [])
     passed_slots = []
 
     for item in inpainted:
         try:
-            # Download before and after
             s3 = get_s3()
             before_local = workspace_path(video_id, f"critic_before_{item['slot_id']}.jpg")
             after_local = workspace_path(video_id, f"critic_after_{item['slot_id']}.jpg")
@@ -1013,28 +956,21 @@ def step_critic(video_id: str, inpaint_result: StepResult) -> StepResult:
                 "\"average\": N, \"pass\": bool, \"notes\": \"...\"}"
             )
 
-            resp = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": f"Compare these two images (before/after inpainting).\n{rubric}"},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{before_b64}", "detail": "low"}},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{after_b64}", "detail": "low"}},
-                            ],
-                        }
-                    ],
-                    "max_tokens": 300,
-                    "response_format": {"type": "json_object"},
-                },
-                timeout=30,
+            critique = mistral_chat_json(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": f"Compare these two images (before/after inpainting).\n{rubric}"},
+                            {"type": "image_url", "image_url": f"data:image/jpeg;base64,{before_b64}"},
+                            {"type": "image_url", "image_url": f"data:image/jpeg;base64,{after_b64}"},
+                        ],
+                    }
+                ],
+                model="mistral-large-latest",
+                max_tokens=500,
+                temperature=0.2,
             )
-            resp.raise_for_status()
-            critique = json.loads(resp.json()["choices"][0]["message"]["content"])
 
             scores = critique.get("scores", {})
             avg = critique.get("average", sum(scores.values()) / max(len(scores), 1))
@@ -1053,16 +989,16 @@ def step_critic(video_id: str, inpaint_result: StepResult) -> StepResult:
         except Exception as exc:
             log("progress", step="critic", status="running", progress=97,
                 message=f"Critic failed for {item.get('slot_id', 'unknown')}: {exc}")
-            item["critic_passed"] = True  # Pass on failure
+            item["critic_passed"] = True
             passed_slots.append(item)
 
     result = StepResult(
-        step="critic", status="success", provider="openai", model="gpt-4o-mini",
+        step="critic", status="success", provider="mistral", model="mistral-large-latest",
         duration_ms=int((time.time() - t0) * 1000),
         data={"slots_passed": len(passed_slots), "slots": passed_slots},
     )
     log("progress", step="critic", status="completed", progress=98,
-        message=f"{len(passed_slots)}/{len(inpainted)} slots passed critic")
+        message=f"{len(passed_slots)}/{len(inpainted)} slots passed critic (Mistral)")
     return result
 
 

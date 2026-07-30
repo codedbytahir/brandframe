@@ -10,11 +10,9 @@ B2_BUCKET = os.environ.get("B2_BUCKET", "")
 B2_REGION = os.environ.get("B2_REGION", "us-west-004")
 B2_ENDPOINT = os.environ.get("B2_ENDPOINT", f"s3.{B2_REGION}.backblazeb2.com")
 
-# ── AI Providers ──
-NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-REPLICATE_API_KEY = os.environ.get("REPLICATE_API_KEY", "")
+# ── AI Providers (FREE: Mistral — https://console.mistral.ai) ──
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
+REPLICATE_API_KEY = os.environ.get("REPLICATE_API_KEY", "")  # optional — FLUX inpainting
 
 # ── Paths (keep in sync with src/lib/b2/paths.ts) ──
 def upload_key(video_id: str) -> str:
