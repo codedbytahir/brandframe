@@ -1,0 +1,24 @@
+genblaze>=0.6.0
+genblaze-core>=0.3.8
+genblaze-s3>=0.3.0
+boto3>=1.35.0
+# ASR
+faster-whisper>=1.1.0
+# Scene detection
+scenedetect>=0.6.5
+# Vision
+opencv-python-headless>=4.10.0
+mediapipe>=0.10.0
+pillow>=11.0.0
+# Embeddings
+sentence-transformers>=3.1.0
+# Vector store
+lancedb>=0.12.0
+pyarrow>=18.0.0
+s3fs>=2024.10.0
+# NLP
+nltk>=3.9.0
+# FFmpeg
+ffmpeg-python>=0.2.0
+# HTTP
+requests>=2.32.0

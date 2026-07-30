@@ -1,0 +1,37 @@
+# Next.js
+.next/
+out/
+
+# Database
+brandframe.db
+*.db
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+
+# Environment
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+
+# Drizzle
+drizzle/
+
+# Coverage
+coverage/
