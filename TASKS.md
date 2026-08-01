@@ -60,14 +60,16 @@ Spec: `docs/specs/08-rag-search.md`, `docs/specs/06-api-routes.md` §4–6.
 - [x] Pipeline `step_embed`: writes portable index sidecar `index/<videoId>/segments.json` on BOTH local and Mistral-fallback paths (previously fallback vectors were discarded); + unit test
 - [x] Demo corpus: 5 videos (`vid_demo001..005`), 21 segments, 16 breaks, 4 ad slots (`scripts/seed-demo-data.py`)
 
-## Phase 5 — Ad Engine (three layers)
+## Phase 5 — Ad Engine (three layers) ✅ DONE (real wiring, 2026-08-01)
 Spec: `docs/specs/09-ad-engine.md`.
-- [ ] `lib/ads/cues.ts` exists — wire to real server data
-- [ ] Player: wire real cues from server; mid-roll card (Layer 2) + pause-ad overlay (Layer 3) + intent overlay (Layer 1)
-- [ ] Layer 3 pause-ad UX finalized: crossfade to inpainted `<img>`, "AI Ad · Why?" badge, Skip + Learn more
-- [ ] Layer 2 natural-break detection: weighted formula
-- [ ] Layer 1 sponsored card in search/chat when brand match score ≥ 0.3
-- [ ] Creator Studio approval UI (before/after thumbnails, Approve/Reject Server Actions)
+- [x] `lib/ads/cues.ts` — rewritten as the server-side cue planner (spec §4): Layer 3 from `ad_slots`⨝`brands` (filled/approved, ≥180s spacing), Layer 2 from `natural_breaks` + B2 `assets/<id>/breaks.json` fallback, greedy ≥180s spacing, ≥55/100 threshold, ≥60s, pause-ad-wins ±10s de-conflict
+- [x] Player: real cues from server in watch RSC; Layer 2 mid-roll card (auto-pause at break ±400ms, Sponsored badge, Skip-in-6 countdown, auto-resume 8s, creative → targetUrl) + Layer 3 pause ad (auto-pause at slot ±400ms, 200ms crossfade, "AI Ad · <brand>" badge, Why? → /verify#slot-<id>, "Play · Skip ad", Learn more) — each cue once per session, impression/skip `console.log` audit events
+- [x] Layer 2 natural-break detection: Python `step_breaks` — weighted formula `0.4·scene_strength + 0.3·silence + 0.2·topic_drop − 0.5·mid_sentence`, ≥180s greedy spacing, sidecar `assets/<id>/breaks.json` + manifest entry; unit-tested
+- [x] Layer 1 intent overlays: `lib/ads/intent.ts` — mistral-embed brand text vectors (in-process cache) with lexical fallback (stopwords/camelCase/de-plural), 0.3 threshold; Sponsored card on `/search` (below AI Overview) and in chat (below latest answer, via `/api/ads/intent`)
+- [x] Creator Studio approval UI: `/studio/slots` queue with before/after thumbs + Approve/Reject/Reset Server Actions; linked from `/studio`
+- [x] Pipeline latent-bug fixes: `run_ingest` negative-index drift — `step_chunk` received the **transcode** result instead of ASR; `step_inpaint` received vl-caption/chunk instead of scenes (would break any real E2E run). Now named references.
+- [x] Brands schema extended (`copy`, `target_url`) + richer seeds (logos, packshots, copy, target URLs)
+- [x] `run_ingest` now 13 steps (added breaks between embed and slots)
 
 ## Phase 6 — Provenance & Disclosure
 Spec: `docs/specs/10-provenance.md`.

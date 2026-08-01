@@ -6,12 +6,11 @@
  * B2 is the source of truth for pipeline-produced embeddings; SQLite covers
  * metadata, seeded demo data, and the offline demo path.
  */
-import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { db } from "@/lib/db";
 import { segments, videos } from "@/lib/db/schema";
 import { and, eq } from "drizzle-orm";
-import { getB2Client } from "@/lib/b2/client";
-import { env, isDemo } from "@/lib/env";
+import { getB2Json } from "@/lib/b2/client";
+import { isDemo } from "@/lib/env";
 
 export interface CorpusSegment {
   id: string; // DB segment id (or generated for sidecar-only rows)
@@ -43,17 +42,8 @@ interface SidecarFile {
 }
 
 async function fetchSidecar(videoId: string): Promise<SidecarFile | null> {
-  try {
-    const res = await getB2Client().send(
-      new GetObjectCommand({ Bucket: env.B2_BUCKET!, Key: `index/${videoId}/segments.json` })
-    );
-    const body = (res.Body as { transformToString?: () => Promise<string> } | undefined)
-      ?.transformToString;
-    if (!body) return null;
-    return JSON.parse(await body.call(res.Body)) as SidecarFile;
-  } catch {
-    return null; // No sidecar for this video (or B2 unreachable) — fine.
-  }
+  // No sidecar for this video (or B2 unreachable) — fine.
+  return getB2Json<SidecarFile>(`index/${videoId}/segments.json`);
 }
 
 export async function loadCorpus(videoId?: string): Promise<CorpusSegment[]> {

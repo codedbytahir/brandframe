@@ -42,6 +42,8 @@ export const brands = sqliteTable("brands", {
   category: text("category").notNull(),
   logoUrl: text("logo_url"),
   packshotUrl: text("packshot_url"),
+  copy: text("copy").notNull().default(""), // 1-line ad copy (Layer 1/2 cards)
+  targetUrl: text("target_url").notNull().default("#"), // click-through target
   colorHex: text("color_hex").notNull().default("#f15a22"),
   allowedSurfaces: text("allowed_surfaces").notNull().default("[]"),
   createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),

@@ -662,6 +662,162 @@ def step_embed(video_id: str, chunk_result: StepResult) -> StepResult:
 
 
 # =====================================================================
+# STEP 7.5 — Natural-break detection (Layer 2 mid-roll cue points)
+# =====================================================================
+# Break score (docs/specs/09 §2):
+#   score = w1 * scene_cut_strength
+#         + w2 * silence_score          (silence seconds, capped at 1.0 for 1s+)
+#         + w3 * topic_similarity_drop  (1 - Jaccard(before-window, after-window))
+#         - w4 * mid_sentence_penalty
+# Weights: w1=0.4, w2=0.3, w3=0.2, w4=0.5. Eligibility: score01 >= 0.55 (stored
+# as int 0-100 in DB, threshold 55). Caps: none in first 60s, >=180s apart.
+
+BREAK_WEIGHTS = {"w1": 0.4, "w2": 0.3, "w3": 0.2, "w4": 0.5}
+BREAK_THRESHOLD = 0.55
+BREAK_MIN_GAP_MS = 250        # ASR pause that counts as silence
+BREAK_FIRST_ALLOWED_MS = 60000
+BREAK_MIN_SPACING_MS = 180000
+
+
+def _token_set(text: str) -> set:
+    return set(
+        t for t in "".join(c.lower() if c.isalnum() else " " for c in text).split() if t
+    )
+
+
+def compute_breaks(
+    asr_segments: list[dict],
+    scenes: list[dict],
+    chunks: list[dict],
+    duration_ms: int,
+) -> list[dict]:
+    """Pure function — returns eligible natural breaks, greedy-spaced.
+
+    Each break: {"timestamp_ms": int, "score": int 0-100, "reason": str}
+    """
+    w = BREAK_WEIGHTS
+
+    # Scene cut times (cut happens at a scene's start)
+    cuts = [sc.get("start_ms", 0) for sc in scenes if sc.get("start_ms", 0) > 0]
+
+    # Candidate times from ASR utterance gaps (midpoint of the gap)
+    candidates = []  # (t_ms, gap_ms)
+    for prev, nxt in zip(asr_segments, asr_segments[1:]):
+        gap = nxt.get("start_ms", 0) - prev.get("end_ms", 0)
+        if gap >= BREAK_MIN_GAP_MS:
+            candidates.append((prev.get("end_ms", 0) + gap // 2, gap))
+    # Scene cuts are candidates even without an ASR pause
+    for cut in cuts:
+        candidates.append((cut, 0))
+
+    # Merge candidates closer than 3s (keep the larger gap)
+    candidates.sort()
+    merged: list[list] = []
+    for t, gap in candidates:
+        if merged and t - merged[-1][0] < 3000:
+            if gap > merged[-1][1]:
+                merged[-1] = [t, gap]
+        else:
+            merged.append([t, gap])
+
+    def scene_strength(t: int) -> float:
+        best = 0.0
+        for cut in cuts:
+            d = abs(cut - t)
+            if d <= 1500:
+                best = max(best, 1.0)
+            elif d < 5000:
+                best = max(best, 1.0 - (d - 1500) / 3500)
+        return best
+
+    def topic_drop(t: int) -> float:
+        before = " ".join(
+            c["text"] for c in chunks
+            if t - 30000 <= (c.get("start_ms", 0) + c.get("end_ms", 0)) / 2 < t
+        )
+        after = " ".join(
+            c["text"] for c in chunks
+            if t <= (c.get("start_ms", 0) + c.get("end_ms", 0)) / 2 < t + 30000
+        )
+        if not before or not after:
+            return 0.0
+        a, b = _token_set(before), _token_set(after)
+        if not a or not b:
+            return 0.0
+        jaccard = len(a & b) / len(a | b)
+        return 1.0 - jaccard
+
+    def mid_sentence(t: int) -> float:
+        for seg in asr_segments:
+            if seg.get("start_ms", 0) + 100 < t < seg.get("end_ms", 0) - 100:
+                return 1.0
+        return 0.0
+
+    scored = []
+    for t, gap in merged:
+        if t < BREAK_FIRST_ALLOWED_MS or t > duration_ms - 5000:
+            continue
+        score01 = (
+            w["w1"] * scene_strength(t)
+            + w["w2"] * min(gap / 1000.0, 1.0)
+            + w["w3"] * topic_drop(t)
+            - w["w4"] * mid_sentence(t)
+        )
+        score01 = max(0.0, min(1.0, score01))
+        if score01 >= BREAK_THRESHOLD:
+            scored.append((t, score01))
+
+    # Greedy selection: highest score first, >=180s from any accepted break
+    scored.sort(key=lambda x: -x[1])
+    accepted: list[tuple[int, float]] = []
+    for t, s in scored:
+        if all(abs(t - at) >= BREAK_MIN_SPACING_MS for at, _ in accepted):
+            accepted.append((t, s))
+    accepted.sort()
+
+    return [
+        {
+            "timestamp_ms": t,
+            "score": int(round(s * 100)),
+            "reason": "scene+silence+topic",
+        }
+        for t, s in accepted
+    ]
+
+
+def step_breaks(video_id: str, asr_result: StepResult, scenes_result: StepResult,
+                chunk_result: StepResult) -> StepResult:
+    t0 = time.time()
+    log("progress", step="breaks", status="running", progress=81,
+        message="Detecting natural breaks for mid-roll placements...")
+
+    asr_segments = asr_result.data.get("segments", [])
+    scenes = scenes_result.data.get("scenes", [])
+    chunks = chunk_result.data.get("chunks", [])
+    duration_ms = chunks[-1]["end_ms"] if chunks else 0
+
+    breaks = compute_breaks(asr_segments, scenes, chunks, duration_ms)
+
+    try:
+        put_object_to_b2(
+            json.dumps({"version": 1, "breaks": breaks}).encode("utf-8"),
+            f"assets/{video_id}/breaks.json",
+            "application/json",
+        )
+    except Exception as exc:
+        log("progress", step="breaks", status="running", progress=81,
+            message=f"⚠ breaks.json upload failed (non-fatal): {exc}")
+
+    log("progress", step="breaks", status="completed", progress=81,
+        message=f"{len(breaks)} natural breaks detected")
+    return StepResult(
+        step="breaks", status="success", provider="deterministic",
+        duration_ms=int((time.time() - t0) * 1000),
+        data={"breaks_count": len(breaks), "breaks": breaks},
+    )
+
+
+# =====================================================================
 # STEP 8 — Slot Detection (Mistral Pixtral vision + MediaPipe)
 # =====================================================================
 def step_slots(video_id: str, scenes_result: StepResult) -> StepResult:
@@ -1162,28 +1318,38 @@ def run_ingest(b2_key: str):
         all_steps.append(step_transcode(video_id, b2_key, all_steps[-1]))
 
         # Step 3: ASR
-        all_steps.append(step_asr(video_id, b2_key))
+        asr_result = step_asr(video_id, b2_key)
+        all_steps.append(asr_result)
 
         # Step 4: Scenes + Keyframes
-        all_steps.append(step_scenes(video_id, b2_key))
+        scenes_result = step_scenes(video_id, b2_key)
+        all_steps.append(scenes_result)
 
         # Step 5: VL Caption
         all_steps.append(step_vl_caption(video_id, all_steps[-1]))
 
-        # Step 6: Chunk
-        all_steps.append(step_chunk(video_id, all_steps[-4], all_steps[-2]))
+        # Step 6: Chunk (ASR utterances + scene boundaries)
+        # NOTE: previously called with all_steps[-4] (= transcode — wrong step)
+        chunk_result = step_chunk(video_id, asr_result, scenes_result)
+        all_steps.append(chunk_result)
 
         # Step 7: Embed
         all_steps.append(step_embed(video_id, all_steps[-1]))
 
-        # Step 8: Slots
-        all_steps.append(step_slots(video_id, all_steps[-4]))
+        # Step 7.5: Natural breaks (Layer 2 mid-roll cue points)
+        all_steps.append(step_breaks(video_id, asr_result, scenes_result, chunk_result))
+
+        # Step 8: Slots (detect ad surfaces on scene keyframes)
+        slots_result = step_slots(video_id, scenes_result)
+        all_steps.append(slots_result)
 
         # Step 9: Brand Match
         all_steps.append(step_brand_match(video_id, all_steps[-1]))
 
-        # Step 10: Inpaint
-        all_steps.append(step_inpaint(video_id, all_steps[-2], all_steps[-6]))
+        # Step 10: Inpaint (slots + scene keyframes)
+        # NOTE: previously called with all_steps[-6] (= vl-caption or chunk —
+        # index drifted as steps were added). Named refs prevent that class of bug.
+        all_steps.append(step_inpaint(video_id, slots_result, scenes_result))
 
         # Step 11: Critic
         all_steps.append(step_critic(video_id, all_steps[-1]))

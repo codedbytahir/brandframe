@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { hybridSearch, generateAiOverview, type SearchResult } from "@/lib/rag/search";
+import { matchBrandIntent } from "@/lib/ads/intent";
+import { SponsoredCard } from "@/components/ads/sponsored-card";
 import { formatTimestamp } from "@/lib/utils";
 
 interface SearchPageProps {
@@ -125,6 +127,8 @@ function ResultCard({ result, query }: { result: SearchResult; query: string }) 
 export default async function SearchPage({ searchParams }: SearchPageProps) {
   const { q: query = "" } = await searchParams;
   const results = query.trim() ? await hybridSearch({ query: query.trim(), limit: 8 }) : [];
+  // Layer 1 — intent overlay: one sponsored card per query, score ≥ 0.3
+  const intentMatch = query.trim() ? await matchBrandIntent(query.trim()) : null;
 
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8">
@@ -170,6 +174,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           </div>
 
           <div className="space-y-4">
+            {intentMatch && <SponsoredCard match={intentMatch} />}
             {results.map((r) => (
               <ResultCard key={`${r.segmentId}-${r.startMs}`} result={r} query={query.trim()} />
             ))}

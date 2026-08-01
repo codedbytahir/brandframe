@@ -199,6 +199,48 @@ def test_build_index_sidecar():
     assert empty["dim"] == 0 and empty["segments"] == []
 
 
+def test_compute_breaks():
+    """Natural-break formula: weighted scene+silence+topic, minus mid-sentence."""
+    from pipelines.cli import compute_breaks
+
+    # ASR utterances with a 1.2s pause at ~2:00 and none elsewhere
+    asr_segments = [
+        {"start_ms": 0, "end_ms": 60000, "text": "first minute of intro content"},
+        {"start_ms": 60500, "end_ms": 120000, "text": "explaining grid fundamentals"},
+        {"start_ms": 121200, "end_ms": 180000, "text": "moving on to columns"},
+        {"start_ms": 180400, "end_ms": 240000, "text": "named areas now"},
+        {"start_ms": 240300, "end_ms": 300000, "text": "summary time"},
+    ]
+    # Scene cuts at 2:01 and 4:00
+    scenes = [
+        {"start_ms": 0, "end_ms": 121000},
+        {"start_ms": 121000, "end_ms": 240000},
+        {"start_ms": 240000, "end_ms": 300000},
+    ]
+    chunks = [
+        {"index": 0, "start_ms": 0, "end_ms": 130000, "text": "grid intro basics rows columns"},
+        {"index": 1, "start_ms": 130000, "end_ms": 250000, "text": "columns responsive minmax autofit"},
+        {"index": 2, "start_ms": 250000, "end_ms": 300000, "text": "summary recap thanks goodbye"},
+    ]
+    breaks = compute_breaks(asr_segments, scenes, chunks, 300000)
+
+    # The ~2:00 gap aligns with the 2:01 scene cut → should be accepted
+    assert len(breaks) >= 1
+    t = breaks[0]["timestamp_ms"]
+    assert 115000 < t < 130000
+    assert breaks[0]["score"] >= 55
+
+    # Caps respected: nothing in first 60s, >=180s spacing
+    assert all(b["timestamp_ms"] >= 60000 for b in breaks)
+    ts = [b["timestamp_ms"] for b in breaks]
+    assert all(b - a >= 180000 for a, b in zip(ts, ts[1:]))
+
+    # Mid-sentence candidates get rejected: transcript with zero pauses → no breaks
+    no_pause = [{"start_ms": 0, "end_ms": 290000, "text": "one uninterrupted wall of speech"}]
+    scenes_none = [{"start_ms": 0, "end_ms": 300000}]
+    assert compute_breaks(no_pause, scenes_none, chunks, 300000) == []
+
+
 if __name__ == "__main__":
     test_step_result_dataclass()
     test_step_result_fallback()
@@ -207,4 +249,5 @@ if __name__ == "__main__":
     test_run_ingest_emits_progress()
     test_run_ingest_handles_errors()
     test_build_index_sidecar()
+    test_compute_breaks()
     print("\nAll pipeline tests passed! ✓")

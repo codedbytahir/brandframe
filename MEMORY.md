@@ -156,6 +156,31 @@ brandframe/
 
 ## 8. Session log (append new entries at top)
 
+### 2026-08-01 (later) — Phase 5 REAL wiring complete (this agent)
+Prior "Phase 5 done" was again optimistic: cues.ts was a pure client planner with
+placeholder inputs, no pipeline breaks step existed, Layer 1/2 were unimplemented,
+no creator approval UI. Completed for real:
+- Pipeline: new `step_breaks` (13th step, deterministic weighted formula per spec §2)
+  writing `assets/<id>/breaks.json` sidecar; **fixed latent negative-index bugs in
+  run_ingest** (step_chunk got transcode instead of ASR; step_inpaint wrong input) —
+  named refs now. New unit test `test_compute_breaks`. 8/8 pipeline tests ✓.
+- `lib/ads/cues.ts` rewritten: server-side planner → PauseAdCue[] + MidrollCue[]
+  (caps + pause-ad-wins de-conflict; breaks sidecar fallback; one-brand-per-video rule).
+- `lib/ads/intent.ts`: Layer 1 brand intent (mistral-embed cache / lexical fallback
+  with stopwords + camelCase + de-plural), 0.3 threshold.
+- Player: Layer 2 mid-roll overlay (auto-pause ±400ms, Skip-in-6, auto-resume 8s),
+  Layer 3 upgraded (auto-pause at cue, 200ms crossfade, copy/targetUrl/logo,
+  "Play · Skip ad"), once-per-session cues, console.log impression/skip audit.
+- Layer 1 surfaces: SponsoredCard on /search (server) + chat panel (client, via
+  `/api/ads/intent`). Verified: coffee→BrewMate, laptop skin→LaptopPro, cereal→
+  SnackBox, programming books→TechBook, gibberish→null (lexical path).
+- Creator approvals: `/studio/slots` + Server Actions (approve/reject/reset),
+  linked from /studio. Brands schema +`copy`,`target_url` (run drizzle push + reseed).
+- ADR-014 logged. typecheck/build clean; dev smoke ✓ (cues: vid_demo001 = 1 pause-ad
+  + 2 mid-rolls, correct spacing/de-conflict).
+- NOT YET live-tested: mid-roll/pause-ad overlays in a real browser (logic smoke-
+  tested server-side only); embedding intent path needs MISTRAL_API_KEY.
+
 ### 2026-08-01 — Phase 4 REAL wiring complete (this agent)
 Found TASKS.md was accurate and the prior "Phase 4 done" handover was optimistic: search/
 chat/overview were stubs, watch/search pages hard-coded, chat panel fake, player on the

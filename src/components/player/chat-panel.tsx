@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useChat } from "ai/react";
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { SponsoredCard } from "@/components/ads/sponsored-card";
+import type { BrandIntentMatch } from "@/lib/ads/intent";
 import { SEEK_EVENT } from "./player";
 
 interface ChatPanelProps {
@@ -92,7 +94,31 @@ export function ChatPanel({ videoId }: ChatPanelProps) {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
+  // Layer 1 — intent overlay: after each completed answer, check whether the
+  // user's last message matches a brand (score ≥ 0.3). One compact card max.
+  const [sponsor, setSponsor] = useState<BrandIntentMatch | null>(null);
+  const lastIntentForRef = useRef<string>("");
+  useEffect(() => {
+    if (isLoading) return;
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastAssistant || !lastUser || lastUser.id === lastIntentForRef.current) return;
+    lastIntentForRef.current = lastUser.id;
+
+    let cancelled = false;
+    fetch(`/api/ads/intent?q=${encodeURIComponent(lastUser.content)}`)
+      .then((r) => (r.ok ? r.json() : { match: null }))
+      .then((data: { match: BrandIntentMatch | null }) => {
+        if (!cancelled) setSponsor(data.match);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoading, messages]);
+
   const waiting = isLoading && messages[messages.length - 1]?.role === "user";
+  const lastMessageId = messages[messages.length - 1]?.id;
 
   return (
     <div className="flex h-[480px] flex-col rounded-lg border border-border bg-card lg:h-full">
@@ -115,6 +141,17 @@ export function ChatPanel({ videoId }: ChatPanelProps) {
           {waiting && (
             <div className="animate-pulse rounded-md bg-muted p-2 text-sm text-muted-foreground">
               Thinking…
+            </div>
+          )}
+          {/* Layer 1 sponsored card below the latest completed answer */}
+          {sponsor && !isLoading && messages[messages.length - 1]?.role === "assistant" && (
+            <div
+              key={`sponsor-${lastMessageId}`}
+              onClickCapture={() =>
+                console.log("[ads] click_through", { layer: 1, brandId: sponsor.brand.id })
+              }
+            >
+              <SponsoredCard match={sponsor} />
             </div>
           )}
         </div>

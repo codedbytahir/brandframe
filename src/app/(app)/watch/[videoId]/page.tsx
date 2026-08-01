@@ -1,12 +1,13 @@
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
-import { asc, eq, inArray, and, desc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Player, type PlayerAd } from "@/components/player/player";
+import { Player, type PlayerAd, type MidrollAd } from "@/components/player/player";
 import { WatchSidebar } from "@/components/player/watch-sidebar";
 import { db } from "@/lib/db";
-import { adSlots, brands, segments, videos } from "@/lib/db/schema";
+import { segments, videos } from "@/lib/db/schema";
+import { buildAdCues } from "@/lib/ads/cues";
 import { formatTimestamp } from "@/lib/utils";
 
 interface WatchPageProps {
@@ -27,36 +28,28 @@ export default async function WatchPage({ params, searchParams }: WatchPageProps
     .where(eq(segments.videoId, videoId))
     .orderBy(asc(segments.index));
 
-  // Layer 3 pause-ad cues: filled/approved in-scene slots joined to their brand.
-  const adRows = await db
-    .select({
-      slotId: adSlots.id,
-      timestampMs: adSlots.timestampMs,
-      surfaceLabel: adSlots.surfaceLabel,
-      beforeFrameUrl: adSlots.beforeFrameUrl,
-      afterFrameUrl: adSlots.afterFrameUrl,
-      brandName: brands.name,
-      brandColor: brands.colorHex,
-    })
-    .from(adSlots)
-    .innerJoin(brands, eq(adSlots.brandId, brands.id))
-    .where(
-      and(
-        eq(adSlots.videoId, videoId),
-        eq(adSlots.layer, 3),
-        inArray(adSlots.status, ["filled", "approved"])
-      )
-    )
-    .orderBy(desc(adSlots.timestampMs));
-
-  const ads: PlayerAd[] = adRows.map((r) => ({
-    slotId: r.slotId,
-    timestampMs: r.timestampMs,
-    surfaceLabel: r.surfaceLabel ?? "object",
-    beforeFrameUrl: r.beforeFrameUrl ?? "",
-    afterFrameUrl: r.afterFrameUrl ?? "",
-    brandName: r.brandName,
-    brandColor: r.brandColor,
+  // Server-side cue planning: Layer 3 pause ads + Layer 2 natural-break mid-rolls
+  const cuePlan = await buildAdCues(videoId);
+  const ads: PlayerAd[] = cuePlan.pauseAds.map((c) => ({
+    slotId: c.slotId,
+    timestampMs: c.ms,
+    surfaceLabel: c.surfaceLabel,
+    beforeFrameUrl: c.beforeFrameUrl,
+    afterFrameUrl: c.afterFrameUrl,
+    brandName: c.brandName,
+    brandColor: c.brandColor,
+    brandLogoUrl: c.brandLogoUrl,
+    copy: c.copy,
+    targetUrl: c.targetUrl,
+  }));
+  const midrolls: MidrollAd[] = cuePlan.midrolls.map((c) => ({
+    breakId: c.breakId,
+    timestampMs: c.ms,
+    brandName: c.brandName,
+    brandColor: c.brandColor,
+    creativeUrl: c.creativeUrl,
+    copy: c.copy,
+    targetUrl: c.targetUrl,
   }));
 
   // Deep link: ?t=<ms> wins; otherwise ?segment=seg_x resolves via DB.
@@ -71,7 +64,7 @@ export default async function WatchPage({ params, searchParams }: WatchPageProps
       <div className="flex flex-col gap-6 lg:flex-row">
         <div className="flex-1">
           <Suspense fallback={<Skeleton className="aspect-video w-full" />}>
-            <Player videoId={videoId} startTime={startTime} ads={ads} />
+            <Player videoId={videoId} startTime={startTime} ads={ads} midrolls={midrolls} />
           </Suspense>
 
           <div className="mt-4">

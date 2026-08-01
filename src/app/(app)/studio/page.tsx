@@ -223,7 +223,15 @@ export default function StudioPage() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      <h1 className="mb-6 text-3xl font-bold">Studio</h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-3xl font-bold">Studio</h1>
+        <a
+          href="/studio/slots"
+          className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
+        >
+          Placement approvals →
+        </a>
+      </div>
 
       {/* Upload Card */}
       <Card className="mb-8">

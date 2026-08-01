@@ -199,3 +199,31 @@ demo mode. Same wire format both ways.
 ### Consequences
 One code path, no protocol branch in the client, citations/seek chips work in
 both modes. We forgo tool-call/data-stream extras we weren't using.
+
+## ADR-014 — Ad engine: server-side cue planner + deterministic Python breaks step
+### Context
+Phase 5 needed real cue data for all three ad layers. The breaks table was only
+seeded; the pipeline never computed natural breaks; and `run_ingest` used
+negative positional indices (`all_steps[-4]` etc.) that had silently drifted —
+`step_chunk` was receiving the *transcode* result and `step_inpaint` a wrong
+result too. Any real E2E run would have chunked garbage or crashed.
+### Decision
+- `run_ingest` passes named `StepResult` references (asr_result, scenes_result,
+  chunk_result, slots_result). A 13th step `step_breaks` runs between embed and
+  slots, implementing the spec's weighted formula entirely deterministically
+  (scene-cut proximity, ASR silence gaps, lexical topic drop, mid-sentence
+  penalty) — no ML calls, fast, unit-testable; threshold 0.55 → stored 0-100.
+- Breaks persist as `assets/<videoId>/breaks.json` sidecar + manifest entry;
+  the Node cue planner reads `natural_breaks` DB rows first, sidecar as
+  fallback (same pattern as the RAG index sidecar, ADR-012).
+- `lib/ads/cues.ts` is the single server-side planner (spec §4): caps and the
+  "pause-ad wins within 10s" rule are enforced there even though the pipeline
+  also enforces them (defense in depth).
+- Layer 1 intent: embedded brand text vectors cached in-process (5 brands),
+  lexical fallback scorer keeps Layer 1 demonstrable without keys.
+- One brand per video for mid-roll creative selection (spec demo
+  simplification): the slot brand, else low-bar intent match on video topics.
+### Consequences
+All three layers run on real data end-to-end offline; E2E pipeline runs can now
+populate breaks/slot cues without code changes. Embedding-based topic-drop and
+DB-side import of breaks.json into `natural_breaks` are noted v2 refinements.

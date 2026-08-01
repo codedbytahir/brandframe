@@ -1,77 +1,200 @@
-import type { Cue, SlotLayer } from "@/lib/types";
+/**
+ * Server-side cue planner (docs/specs/09 §4): builds the ad cue list for a
+ * video at page-load time — no client-side auction.
+ *
+ * Data: `ad_slots` ⨝ `brands` (Layer 3), `natural_breaks` (Layer 2, from the
+ * pipeline `breaks` step or seeds; falls back to the B2 sidecar
+ * `assets/<videoId>/breaks.json` when the DB has none but B2 is configured).
+ *
+ * Caps enforced here as defense-in-depth (pipeline also enforces):
+ *   Layer 2: none in first 60s, ≥180s apart, score ≥55 (of 100).
+ *   Layer 3: ≥180s between pause ads.
+ *   Never stacked: within 10s of a Layer-3 cue, Layer-2 loses (spec §3.5).
+ */
+import { and, asc, eq, inArray } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { adSlots, brands, naturalBreaks, segments, videos } from "@/lib/db/schema";
+import { getB2Json } from "@/lib/b2/client";
+import { isDemo } from "@/lib/env";
+import { listBrands, matchBrandIntent, type BrandRecord } from "./intent";
 
-export interface CuePlannerOptions {
-  videoId: string;
-  durationMs: number;
-  slots: Array<{
-    id: string;
-    layer: SlotLayer;
-    timestampMs: number;
-    brandName: string;
-    brandColor: string;
-    afterFrameUrl: string;
-    beforeFrameUrl: string;
-    surfaceLabel: string;
-  }>;
-  breaks: Array<{ timestampMs: number; score: number }>;
-  currentTimeMs?: number;
+export interface PauseAdCue {
+  kind: "pausead";
+  slotId: string;
+  ms: number;
+  surfaceLabel: string;
+  beforeFrameUrl: string;
+  afterFrameUrl: string;
+  brandName: string;
+  brandColor: string;
+  brandLogoUrl: string | null;
+  copy: string;
+  targetUrl: string;
 }
 
-export function planCues(options: CuePlannerOptions): Cue[] {
-  const { slots, breaks, durationMs, currentTimeMs = 0 } = options;
-  const cues: Cue[] = [];
+export interface MidrollCue {
+  kind: "midroll";
+  breakId: string;
+  ms: number;
+  score: number;
+  brandName: string;
+  brandColor: string;
+  creativeUrl: string;
+  copy: string;
+  targetUrl: string;
+}
 
-  // Layer 3 — Pause ads (max 1 per 3-5 min)
-  const layer3Slots = slots
-    .filter((s) => s.layer === 3)
-    .filter((s) => s.timestampMs >= 180000); // Not in first 3 min
+export interface AdCuePlan {
+  pauseAds: PauseAdCue[];
+  midrolls: MidrollCue[];
+}
 
-  // Pick one slot per 3-5 minute window
-  let lastLayer3Ms = -300000;
-  for (const slot of layer3Slots) {
-    if (slot.timestampMs - lastLayer3Ms >= 180000 && slot.timestampMs + 300000 <= durationMs) {
-      cues.push({
-        slotId: slot.id,
-        videoId: options.videoId,
-        layer: 3,
-        timestampMs: slot.timestampMs,
-        durationMs: 0, // pause ad - no duration
-        brandName: slot.brandName,
-        brandColor: slot.brandColor,
-        afterFrameUrl: slot.afterFrameUrl,
-        beforeFrameUrl: slot.beforeFrameUrl,
-        surfaceLabel: slot.surfaceLabel,
-      });
-      lastLayer3Ms = slot.timestampMs;
-    }
+const BREAK_THRESHOLD_0_100 = 55;
+const FIRST_ALLOWED_MS = 60_000;
+const MIDROLL_SPACING_MS = 180_000;
+const PAUSEAD_SPACING_MS = 180_000;
+const CONFLICT_WINDOW_MS = 10_000; // pause ad wins within ±10s
+
+async function loadBreaks(videoId: string): Promise<Array<{ id: string; ms: number; score: number }>> {
+  const rows = await db
+    .select()
+    .from(naturalBreaks)
+    .where(eq(naturalBreaks.videoId, videoId))
+    .orderBy(asc(naturalBreaks.timestampMs));
+  if (rows.length > 0) {
+    return rows.map((r) => ({ id: r.id, ms: r.timestampMs, score: r.score }));
   }
-
-  // Layer 2 — Natural break mid-rolls (max 1 per 3 min, not first 60s)
-  const layer2Slots = slots.filter((s) => s.layer === 2);
-  let lastBreakMs = -180000;
-  for (const brk of breaks) {
-    if (brk.timestampMs < 60000) continue; // Not in first 60s
-    if (brk.timestampMs - lastBreakMs < 180000) continue;
-
-    const match = layer2Slots.find(
-      (s) => Math.abs(s.timestampMs - brk.timestampMs) < 5000
+  // Sidecar fallback: pipeline wrote breaks.json but webhook hasn't imported it
+  if (!isDemo) {
+    const sc = await getB2Json<{ breaks: Array<{ timestamp_ms: number; score: number }> }>(
+      `assets/${videoId}/breaks.json`
     );
-    if (match) {
-      cues.push({
-        slotId: match.id,
-        videoId: options.videoId,
-        layer: 2,
-        timestampMs: brk.timestampMs,
-        durationMs: 6000,
-        brandName: match.brandName,
-        brandColor: match.brandColor,
-        afterFrameUrl: match.afterFrameUrl,
-        beforeFrameUrl: match.beforeFrameUrl,
-        surfaceLabel: match.surfaceLabel,
+    if (sc?.breaks?.length) {
+      return sc.breaks.map((b, i) => ({ id: `brk_side_${i}`, ms: b.timestamp_ms, score: b.score }));
+    }
+  }
+  return [];
+}
+
+/** One brand per video (demo simplification, spec §3.2): the brand already
+ * attached to the video's slots, else a low-bar intent match on the video's
+ * topics, else the first opted-in brand. */
+async function pickVideoBrand(videoId: string, slotBrands: BrandRecord[]): Promise<BrandRecord | null> {
+  if (slotBrands.length > 0) return slotBrands[0];
+
+  const video = await db.select().from(videos).where(eq(videos.id, videoId)).get();
+  const topics = await db
+    .select({ topic: segments.topic })
+    .from(segments)
+    .where(eq(segments.videoId, videoId));
+  const text = [video?.title ?? "", ...topics.map((t) => t.topic ?? "")].join(". ");
+
+  const match = text.trim() ? await matchBrandIntent(text, 0.15) : null;
+  if (match) return match.brand;
+
+  const all = await listBrands();
+  return all[0] ?? null;
+}
+
+export async function buildAdCues(videoId: string): Promise<AdCuePlan> {
+  // ── Layer 3: pause ads from filled/approved slots ───────────────────────
+  const slotRows = await db
+    .select({
+      slotId: adSlots.id,
+      ms: adSlots.timestampMs,
+      surfaceLabel: adSlots.surfaceLabel,
+      beforeFrameUrl: adSlots.beforeFrameUrl,
+      afterFrameUrl: adSlots.afterFrameUrl,
+      brandName: brands.name,
+      brandColor: brands.colorHex,
+      brandLogoUrl: brands.logoUrl,
+      copy: brands.copy,
+      targetUrl: brands.targetUrl,
+      brandId: brands.id,
+      brandCategory: brands.category,
+      brandPackshot: brands.packshotUrl,
+      allowedSurfaces: brands.allowedSurfaces,
+    })
+    .from(adSlots)
+    .innerJoin(brands, eq(adSlots.brandId, brands.id))
+    .where(
+      and(
+        eq(adSlots.videoId, videoId),
+        eq(adSlots.layer, 3),
+        inArray(adSlots.status, ["filled", "approved"])
+      )
+    )
+    .orderBy(asc(adSlots.timestampMs));
+
+  const pauseAds: PauseAdCue[] = [];
+  let lastPauseMs = -PAUSEAD_SPACING_MS;
+  const slotBrands: BrandRecord[] = [];
+  for (const s of slotRows) {
+    if (s.ms - lastPauseMs < PAUSEAD_SPACING_MS) continue;
+    lastPauseMs = s.ms;
+    pauseAds.push({
+      kind: "pausead",
+      slotId: s.slotId,
+      ms: s.ms,
+      surfaceLabel: s.surfaceLabel ?? "object",
+      beforeFrameUrl: s.beforeFrameUrl ?? "",
+      afterFrameUrl: s.afterFrameUrl ?? "",
+      brandName: s.brandName,
+      brandColor: s.brandColor,
+      brandLogoUrl: s.brandLogoUrl,
+      copy: s.copy,
+      targetUrl: s.targetUrl,
+    });
+    slotBrands.push({
+      id: s.brandId,
+      name: s.brandName,
+      category: s.brandCategory,
+      logoUrl: s.brandLogoUrl,
+      packshotUrl: s.brandPackshot,
+      copy: s.copy,
+      targetUrl: s.targetUrl,
+      colorHex: s.brandColor,
+      allowedSurfaces: JSON.parse(s.allowedSurfaces || "[]") as string[],
+    });
+  }
+
+  // ── Layer 2: natural-break mid-rolls ────────────────────────────────────
+  const breaks = await loadBreaks(videoId);
+  const midrollBrand = await pickVideoBrand(videoId, slotBrands);
+
+  const midrolls: MidrollCue[] = [];
+  if (midrollBrand) {
+    const eligible = breaks
+      .filter((b) => b.ms >= FIRST_ALLOWED_MS && b.score >= BREAK_THRESHOLD_0_100)
+      .sort((a, b) => b.score - a.score);
+
+    const accepted: typeof eligible = [];
+    for (const brk of eligible) {
+      if (!accepted.every((a) => Math.abs(a.ms - brk.ms) >= MIDROLL_SPACING_MS)) continue;
+      // Pause ad wins within ±10s (spec §3.5: never stacked)
+      if (pauseAds.some((p) => Math.abs(p.ms - brk.ms) < CONFLICT_WINDOW_MS)) continue;
+      accepted.push(brk);
+    }
+    accepted.sort((a, b) => a.ms - b.ms);
+
+    for (const brk of accepted) {
+      midrolls.push({
+        kind: "midroll",
+        breakId: brk.id,
+        ms: brk.ms,
+        score: brk.score,
+        brandName: midrollBrand.name,
+        brandColor: midrollBrand.colorHex,
+        creativeUrl: midrollBrand.packshotUrl ?? midrollBrand.logoUrl ?? "",
+        copy: midrollBrand.copy,
+        targetUrl: midrollBrand.targetUrl,
       });
-      lastBreakMs = brk.timestampMs;
     }
   }
 
-  return cues;
+  const plan = { pauseAds, midrolls };
+  console.log(
+    `[ads] cues for ${videoId}: ${plan.pauseAds.length} pause-ads, ${plan.midrolls.length} mid-rolls`
+  );
+  return plan;
 }

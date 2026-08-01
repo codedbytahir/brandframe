@@ -15,6 +15,19 @@ export interface PlayerAd {
   afterFrameUrl: string;
   beforeFrameUrl: string;
   surfaceLabel: string;
+  copy?: string;
+  targetUrl?: string;
+  brandLogoUrl?: string | null;
+}
+
+export interface MidrollAd {
+  breakId: string;
+  timestampMs: number;
+  brandName: string;
+  brandColor: string;
+  creativeUrl: string;
+  copy: string;
+  targetUrl: string;
 }
 
 interface PlayerProps {
@@ -24,6 +37,7 @@ interface PlayerProps {
   onTimeUpdate?: (timeMs: number) => void;
   onCue?: (cue: { timestampMs: number; slotId: string }) => void;
   ads?: PlayerAd[];
+  midrolls?: MidrollAd[];
 }
 
 interface PlaybackInfo {
@@ -32,15 +46,20 @@ interface PlaybackInfo {
   captionsUrl: string;
 }
 
-export function Player({ videoId, startTime = 0, className, onTimeUpdate, onCue, ads = [] }: PlayerProps) {
+export function Player({ videoId, startTime = 0, className, onTimeUpdate, onCue, ads = [], midrolls = [] }: PlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [playback, setPlayback] = useState<PlaybackInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [currentAd, setCurrentAd] = useState<PlayerAd | null>(null);
   const [showPauseAd, setShowPauseAd] = useState(false);
+  const [currentMidroll, setCurrentMidroll] = useState<MidrollAd | null>(null);
+  const [skipCountdown, setSkipCountdown] = useState(0);
   const hlsRef = useRef<Hls | null>(null);
   const pendingStartRef = useRef(startTime);
+  // Each cue fires at most once per playback session
+  const shownPauseAdsRef = useRef<Set<string>>(new Set());
+  const shownMidrollsRef = useRef<Set<string>>(new Set());
 
   // ── Resolve playback source (real B2 proxy or demo fallback) ─────────────
   useEffect(() => {
@@ -164,19 +183,71 @@ export function Player({ videoId, startTime = 0, className, onTimeUpdate, onCue,
       if (Math.abs(timeMs - ad.timestampMs) < 100) {
         onCue?.({ timestampMs: ad.timestampMs, slotId: ad.slotId });
       }
+      // Layer 3: auto-pause at the cue (±400ms), once per session (spec §3.5)
+      if (
+        Math.abs(timeMs - ad.timestampMs) <= 400 &&
+        !shownPauseAdsRef.current.has(ad.slotId) &&
+        !currentMidroll
+      ) {
+        shownPauseAdsRef.current.add(ad.slotId);
+        console.log("[ads] ad_impression", { layer: 3, slotId: ad.slotId, ms: ad.timestampMs });
+        video.pause();
+        setCurrentAd(ad);
+        setShowPauseAd(true);
+        return; // one overlay at a time
+      }
     }
-  }, [ads, onTimeUpdate, onCue]);
+
+    // Layer 2: natural-break mid-roll (±400ms), once per session
+    if (!currentMidroll && !showPauseAd) {
+      for (const m of midrolls) {
+        if (Math.abs(timeMs - m.timestampMs) <= 400 && !shownMidrollsRef.current.has(m.breakId)) {
+          shownMidrollsRef.current.add(m.breakId);
+          console.log("[ads] ad_impression", { layer: 2, breakId: m.breakId, ms: m.timestampMs });
+          video.pause();
+          setCurrentMidroll(m);
+          setSkipCountdown(6);
+          break;
+        }
+      }
+    }
+  }, [ads, midrolls, currentMidroll, showPauseAd, onTimeUpdate, onCue]);
+
+  // Mid-roll: 6s skip countdown; auto-resume after 8s total (spec §2 UX)
+  useEffect(() => {
+    if (!currentMidroll) return;
+    const tick = setInterval(() => setSkipCountdown((c) => Math.max(0, c - 1)), 1000);
+    const autoResume = setTimeout(() => {
+      setCurrentMidroll(null);
+      videoRef.current?.play().catch(() => {});
+    }, 8000);
+    return () => {
+      clearInterval(tick);
+      clearTimeout(autoResume);
+    };
+  }, [currentMidroll]);
+
+  const dismissMidroll = useCallback(() => {
+    if (currentMidroll) {
+      console.log("[ads] ad_skipped", { layer: 2, breakId: currentMidroll.breakId });
+    }
+    setCurrentMidroll(null);
+    videoRef.current?.play().catch(() => {});
+  }, [currentMidroll]);
 
   const handlePause = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
     const timeMs = Math.floor(video.currentTime * 1000);
 
-    // Layer 3 pause ad: slot whose cue window contains the pause point
+    // Manual pause within a slot's cue window (5s) also surfaces the pause ad,
+    // unless it already fired this session.
     const match = ads.find(
       (a) => a.timestampMs <= timeMs + 1000 && a.timestampMs + 5000 >= timeMs
     );
-    if (match) {
+    if (match && !shownPauseAdsRef.current.has(match.slotId)) {
+      shownPauseAdsRef.current.add(match.slotId);
+      console.log("[ads] ad_impression", { layer: 3, slotId: match.slotId, ms: match.timestampMs });
       setCurrentAd(match);
       setShowPauseAd(true);
     }
@@ -188,10 +259,13 @@ export function Player({ videoId, startTime = 0, className, onTimeUpdate, onCue,
   }, []);
 
   const dismissAd = useCallback(() => {
+    if (currentAd) {
+      console.log("[ads] ad_skipped", { layer: 3, slotId: currentAd.slotId });
+    }
     setShowPauseAd(false);
     setCurrentAd(null);
     videoRef.current?.play().catch(() => {});
-  }, []);
+  }, [currentAd]);
 
   return (
     <div
@@ -225,7 +299,55 @@ export function Player({ videoId, startTime = 0, className, onTimeUpdate, onCue,
         </div>
       )}
 
-      {/* Layer 3 Pause Ad Overlay */}
+      {/* Layer 2 — Natural-break mid-roll */}
+      {currentMidroll && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/85">
+          <div className="relative w-full max-w-md rounded-lg bg-card p-5 shadow-2xl">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="inline-flex items-center rounded-md border border-muted-foreground/40 px-2 py-0.5 text-xs text-muted-foreground">
+                Sponsored
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Ad · {currentMidroll.brandName}
+              </span>
+            </div>
+
+            {currentMidroll.creativeUrl ? (
+              <a href={currentMidroll.targetUrl} target="_blank" rel="noopener noreferrer sponsored">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={currentMidroll.creativeUrl}
+                  alt={`${currentMidroll.brandName} creative`}
+                  className="mb-3 w-full rounded-md"
+                />
+              </a>
+            ) : (
+              <div
+                className="mb-3 flex aspect-video items-center justify-center rounded-md text-lg font-semibold text-white"
+                style={{ backgroundColor: currentMidroll.brandColor }}
+              >
+                {currentMidroll.brandName}
+              </div>
+            )}
+            {currentMidroll.copy && (
+              <p className="mb-3 text-sm text-muted-foreground">{currentMidroll.copy}</p>
+            )}
+
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Video resumes automatically</span>
+              <button
+                onClick={dismissMidroll}
+                disabled={skipCountdown > 0}
+                className="rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
+              >
+                {skipCountdown > 0 ? `Skip in ${skipCountdown}` : "Skip"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Layer 3 — In-scene pause ad (crossfades to the inpainted frame) */}
       {showPauseAd && currentAd && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/80">
           <div className="relative max-w-lg rounded-lg bg-card p-6 shadow-2xl">
@@ -234,25 +356,31 @@ export function Player({ videoId, startTime = 0, className, onTimeUpdate, onCue,
                 className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium text-white"
                 style={{ backgroundColor: currentAd.brandColor }}
               >
-                {currentAd.brandName}
+                {currentAd.brandLogoUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={currentAd.brandLogoUrl} alt="" className="h-3.5 w-3.5 rounded-full object-cover" />
+                )}
+                AI Ad · {currentAd.brandName}
               </span>
               <a
                 href={`/verify/${videoId}#slot-${currentAd.slotId}`}
                 className="inline-flex items-center gap-1 rounded-md bg-amber-600/20 px-2 py-0.5 text-xs text-amber-400 hover:bg-amber-600/30"
               >
-                AI Ad · Why?
+                Why?
               </a>
             </div>
-            {/* crossfade before → after */}
+            {/* crossfade before → after (200ms per spec §3.5) */}
             <div className="relative mb-3 overflow-hidden rounded-md">
               {currentAd.beforeFrameUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img src={currentAd.beforeFrameUrl} alt="Original scene" className="w-full" />
               )}
               {currentAd.afterFrameUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={currentAd.afterFrameUrl}
                   alt="Brand-integrated scene"
-                  className="absolute inset-0 h-full w-full animate-[crossfade_1.2s_ease-in_forwards] opacity-0"
+                  className="absolute inset-0 h-full w-full animate-[crossfade_0.2s_ease-in_forwards] opacity-0"
                 />
               )}
               {!currentAd.afterFrameUrl && !currentAd.beforeFrameUrl && (
@@ -261,16 +389,29 @@ export function Player({ videoId, startTime = 0, className, onTimeUpdate, onCue,
                 </div>
               )}
             </div>
+            {currentAd.copy && <p className="mb-2 text-sm">{currentAd.copy}</p>}
             <p className="mb-4 text-xs text-muted-foreground">
-              This ad replaces a {currentAd.surfaceLabel} in the scene. Creator-approved.
-              <a href={`/verify/${videoId}`} className="ml-1 text-primary hover:underline">Learn more</a>
+              This scene contains an AI-generated placement on a {currentAd.surfaceLabel}.
+              We disclosed it, the creator approved it, and the record is locked.
             </p>
-            <div className="flex justify-end gap-2">
+            <div className="flex items-center justify-between gap-2">
+              {currentAd.targetUrl && currentAd.targetUrl !== "#" ? (
+                <a
+                  href={currentAd.targetUrl}
+                  target="_blank"
+                  rel="noopener noreferrer sponsored"
+                  className="text-xs text-primary hover:underline"
+                >
+                  Learn more
+                </a>
+              ) : (
+                <span />
+              )}
               <button
                 onClick={dismissAd}
                 className="rounded-md bg-primary px-4 py-2 text-sm text-white hover:bg-primary/90"
               >
-                Skip
+                Play · Skip ad
               </button>
             </div>
           </div>
