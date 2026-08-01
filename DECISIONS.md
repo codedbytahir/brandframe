@@ -227,3 +227,18 @@ result too. Any real E2E run would have chunked garbage or crashed.
 All three layers run on real data end-to-end offline; E2E pipeline runs can now
 populate breaks/slot cues without code changes. Embedding-based topic-drop and
 DB-side import of breaks.json into `natural_breaks` are noted v2 refinements.
+
+## ADR-015 — Verify page frames via prefix-restricted public proxy (not signed URLs)
+### Context
+/verify is a public, unauthenticated page meant to be shared. Frames live in a
+private Object-Lock bucket; presigned GETs expire (max 7 days) and would break
+shared verifier links — the exact scenario the page exists for.
+### Decision
+`/api/verify-frames/[videoId]?key=...` streams only keys under `assets/` or
+`manifests/` containing the path's videoId (no traversal, no arbitrary bucket
+proxying), with 24h immutable caching. The playback HLS proxy (ADR-011) stays
+scoped to `playable/`; this one is scoped to provenance artifacts.
+### Consequences
+Shareable verify URLs survive indefinitely (cache-window revalidation aside);
+attack surface is two read-only prefixes enforced server-side. If we ever add
+private/unlisted videos, add an ownership token to the query.

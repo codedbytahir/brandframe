@@ -156,6 +156,23 @@ brandframe/
 
 ## 8. Session log (append new entries at top)
 
+### 2026-08-01 (latest) — Phase 6 REAL wiring complete (this agent)
+Verify page was a hard-coded green banner with fake timeline. Now real:
+- `src/lib/provenance/verify.ts`: real B2 verification — fetch manifest bytes,
+  SHA-256 recompute (source full-hash <200MB, before/after frames), HeadObject
+  Object Lock mode/retain-until → VerifyResult{verified|warning|no-manifest|demo}.
+  Demo mode (no keys) synthesizes a clearly-labeled simulated manifest from DB.
+- Manifest step enriched: run_id, source.sha256 (+hash_type), placements get
+  brand/timestamp_ms/bbox (inpaint already sets GOVERNANCE 365d on after-frames).
+- `/verify/[videoId]` rewritten per spec §5 (banner, custody timeline — 13 steps,
+  placement cards, technical details + CopyButton). New: BeforeAfterSlider
+  (range clip-path), `/api/verify-frames` (prefix-restricted public proxy, 24h
+  cache — ADR-015). Disclosure copy now verbatim per spec §6.
+- Verified live: demo001 renders banner + 13-step custody + 2 placement cards w/
+  #slot anchors; demo003 hides placements; unknown id → 404. Tests+typecheck+build ✓.
+- NOT live-tested (needs B2 creds): green verified path, amber mismatch path —
+  code paths complete, exercised only in demo sim. Manual corruption test per spec §8 pending keys.
+
 ### 2026-08-01 (later) — Phase 5 REAL wiring complete (this agent)
 Prior "Phase 5 done" was again optimistic: cues.ts was a pure client planner with
 placeholder inputs, no pipeline breaks step existed, Layer 1/2 were unimplemented,

@@ -35,10 +35,13 @@ export function SponsoredCard({
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="font-semibold">{brand.name}</span>
             <span className="rounded border border-muted-foreground/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
               Sponsored
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              content-matched brand, not user-targeted
             </span>
           </div>
           {!compact && brand.copy && (

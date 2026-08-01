@@ -1225,6 +1225,9 @@ def step_manifest(video_id: str, b2_key: str, all_steps: list[StepResult]) -> St
                 placements.append({
                     "slot_id": item["slot_id"],
                     "surface": item["surface"],
+                    "timestamp_ms": item.get("timestamp_ms", 0),
+                    "brand": item.get("brand", ""),
+                    "bbox": item.get("bbox_1000", []),
                     "before_sha256": item.get("before_sha256", ""),
                     "after_sha256": item.get("after_sha256", ""),
                     "critic_passed": item.get("critic_passed", True),
@@ -1233,11 +1236,31 @@ def step_manifest(video_id: str, b2_key: str, all_steps: list[StepResult]) -> St
                     "after_key": item.get("after_key", ""),
                 })
 
+    # Content hash of the source MP4 (full — the file is still in the local
+    # workspace at manifest time; cleanup happens in run_ingest's finally).
+    source_sha256 = ""
+    source_hash_type = "none"
+    local_src = workspace_path(video_id, "source.mp4")
+    try:
+        if os.path.exists(local_src):
+            source_sha256 = sha256_of_file(local_src)
+            source_hash_type = "full"
+    except Exception as exc:
+        log("progress", step="manifest", status="running", progress=99,
+            message=f"⚠ source hash failed (non-fatal): {exc}")
+
     manifest = {
         "manifest_id": f"mfst_{uuid.uuid4().hex[:12]}",
+        "manifest_version": "1.0.0",
+        "run_id": f"run_{int(time.time())}",
         "video_id": video_id,
         "version": "1.0",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "source": {
+            "b2_key": b2_key,
+            "sha256": source_sha256,
+            "hash_type": source_hash_type,  # "full" | "none" (partial reserved for >200MB)
+        },
         "retention": {"mode": "COMPLIANCE", "days": 365},
         "entries": [
             {
@@ -1290,6 +1313,8 @@ def step_manifest(video_id: str, b2_key: str, all_steps: list[StepResult]) -> St
         data={
             "manifest_id": manifest["manifest_id"],
             "manifest_key": manifest_b2_key,
+            "run_id": manifest["run_id"],
+            "source_sha256": source_sha256,
             "placements_count": len(placements),
         },
     )

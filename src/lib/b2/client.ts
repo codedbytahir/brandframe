@@ -21,13 +21,26 @@ export function b2PublicUrl(bucket: string, key: string): string {
 
 /** Fetch + parse a JSON object from B2. Null when missing/unreachable. */
 export async function getB2Json<T>(key: string): Promise<T | null> {
+  const bytes = await getB2Bytes(key);
+  if (!bytes) return null;
+  try {
+    return JSON.parse(Buffer.from(bytes).toString("utf-8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Raw object bytes from B2 (for hashing). Null when missing/unreachable. */
+export async function getB2Bytes(key: string, range?: string): Promise<Uint8Array | null> {
   try {
     const { GetObjectCommand } = await import("@aws-sdk/client-s3");
     const bucket = process.env.B2_BUCKET || "";
-    const res = await getB2Client().send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-    const body = res.Body as { transformToString?: () => Promise<string> } | undefined;
-    if (!body?.transformToString) return null;
-    return JSON.parse(await body.transformToString()) as T;
+    const res = await getB2Client().send(
+      new GetObjectCommand({ Bucket: bucket, Key: key, Range: range })
+    );
+    const body = res.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
+    if (!body?.transformToByteArray) return null;
+    return await body.transformToByteArray();
   } catch {
     return null;
   }
