@@ -165,6 +165,40 @@ def test_run_ingest_handles_errors():
     assert complete_events[0]["data"]["success"] is False
 
 
+def test_build_index_sidecar():
+    """Index sidecar must carry normalized vectors + chunk timing for the Node RAG."""
+    import math
+    from pipelines.cli import build_index_sidecar
+
+    chunks = [
+        {"index": 0, "start_ms": 0, "end_ms": 30000, "text": "intro to grid"},
+        {"index": 1, "start_ms": 30000, "end_ms": 65000, "text": "centering with place-items"},
+    ]
+    # works with plain lists (Mistral path) and anything iterable (numpy path)
+    embeddings = [[3.0, 4.0], [1.0, 0.0]]
+
+    sc = build_index_sidecar(chunks, embeddings, "mistral-embed")
+
+    assert sc["version"] == 1
+    assert sc["model"] == "mistral-embed"
+    assert sc["dim"] == 2
+    assert len(sc["segments"]) == 2
+
+    seg0 = sc["segments"][0]
+    assert seg0["index"] == 0 and seg0["start_ms"] == 0 and seg0["text"] == "intro to grid"
+    # L2-normalized: [3,4] → [0.6, 0.8]
+    assert math.isclose(seg0["embedding"][0], 0.6, abs_tol=1e-6)
+    assert math.isclose(seg0["embedding"][1], 0.8, abs_tol=1e-6)
+    # unit norm
+    for s in sc["segments"]:
+        norm = math.sqrt(sum(x * x for x in s["embedding"]))
+        assert math.isclose(norm, 1.0, abs_tol=1e-4)
+
+    # empty chunks shouldn't crash
+    empty = build_index_sidecar([], [], "mistral-embed")
+    assert empty["dim"] == 0 and empty["segments"] == []
+
+
 if __name__ == "__main__":
     test_step_result_dataclass()
     test_step_result_fallback()
@@ -172,4 +206,5 @@ if __name__ == "__main__":
     test_step_result_serialization()
     test_run_ingest_emits_progress()
     test_run_ingest_handles_errors()
+    test_build_index_sidecar()
     print("\nAll pipeline tests passed! ✓")

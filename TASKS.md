@@ -46,17 +46,19 @@ All 12 Steps are **fully implemented with real provider code** in `pipelines/cli
 - [ ] **Manual:** Retry action (Server Action) for failed videos
 - [ ] **Manual:** B2 Lifecycle Rule: `tmp/` delete after 48h
 
-## Phase 4 — Player, Search, AI Overview, Chat (STUBS — need real wiring)
+## Phase 4 — Player, Search, AI Overview, Chat ✅ DONE (real wiring, 2026-08-01)
 Spec: `docs/specs/08-rag-search.md`, `docs/specs/06-api-routes.md` §4–6.
-- [ ] Wire `lib/rag/search.ts` to LanceDB on B2: BGE-M3 (OpenAI fallback) → hybrid 0.5dense+0.2bm25+0.3clip → top-20 → cross-encoder → top-5
-- [ ] `/search` RSC: render timestamped result cards, `<mark>` query term, signed thumbnails
-- [ ] AI Overview card: Vercel AI SDK `generateText` with RAG context + `[N](t:MM:SS)` citations
-- [ ] `POST /api/chat` — Vercel AI SDK `streamText` with RAG system prompt + `<ts ms="…">X:XX</ts>`
-- [ ] Chat panel: `useChat` hook, render `<ts>` as clickable seek chips
-- [ ] `GET /api/playback/[videoId]` — return signed HLS URL (+ poster), 409 if not ready
-- [ ] Player: swap mux test stream for signed HLS URL, support `?t=<ms>` deep link
-- [ ] Chapters bar (from `segments.topic`), WebVTT captions, keyboard shortcuts
-- [ ] Watch page: 3/4 player + 1/4 sidebar tabs (Chapters | Chat | About) on lg
+- [x] `lib/rag/` real hybrid retrieval: Mistral `mistral-embed` dense (SQLite-cached) + BM25 → 0.5/0.2 weighted fusion on min-max-normalized scores → top-20 → token-F1 rerank → top-N. CLIP query vectors skipped per spec §2. Corpus from SQLite + B2 index sidecar `index/<videoId>/segments.json` (`lib/rag/corpus.ts`).
+- [x] `/search` RSC: real results, `<mark>` query highlighting, timestamp chips, thumbnails, AI Overview in Suspense with skeleton
+- [x] AI Overview card: Vercel AI SDK `generateText` (`mistral-large-latest`) + `[N](t:MM:SS)` citations rendered as clickable chips → `/watch/<vid>?t=<ms>`; keyless fallback keeps citation format
+- [x] `POST /api/chat` — Vercel AI SDK `streamText` (Mistral) with RAG system prompt, `<ts ms="…">X:XX</ts>` citations, last-6-messages context; demo mode streams a DB-grounded answer (text-stream protocol)
+- [x] Chat panel: `useChat` (`streamProtocol: "text"`), `<ts>` tags → clickable seek chips (player seek + shareable `?t=` URL), **bold** inline rendering
+- [x] `GET /api/playback/[videoId]` — real mode: same-origin B2 HLS proxy URL (+ poster, captions); 409 if not ready with `code: VIDEO_NOT_READY`; demo mode: seeded stream URL
+- [x] `GET /api/playback/[videoId]/file/[...path]` — B2 streaming proxy (Range/206, content types, cache headers) — chosen over presigned URLs because HLS playlists use relative URIs (see DECISIONS.md, refs backblaze.com/apidocs)
+- [x] Player: resolves real source via API, `?t=<ms>` + `?segment=` deep links, `brandframe:seek` custom-event seeking, WebVTT captions track (`/api/captions/[videoId]`), keyboard shortcuts (←/→ space/k f m), 409 auto-retry while processing
+- [x] Chapters from `segments.topic`; watch page = 3/4 player + 1/4 sidebar tabs (AI Chat | Chapters | About) on lg; real video metadata; Layer-3 pause-ad cues wired from DB (slots ⨝ brands)
+- [x] Pipeline `step_embed`: writes portable index sidecar `index/<videoId>/segments.json` on BOTH local and Mistral-fallback paths (previously fallback vectors were discarded); + unit test
+- [x] Demo corpus: 5 videos (`vid_demo001..005`), 21 segments, 16 breaks, 4 ad slots (`scripts/seed-demo-data.py`)
 
 ## Phase 5 — Ad Engine (three layers)
 Spec: `docs/specs/09-ad-engine.md`.

@@ -8,9 +8,13 @@ const envSchema = z.object({
   B2_REGION: z.string().default("us-west-004"),
   B2_ENDPOINT: z.string().default("s3.us-west-004.backblazeb2.com"),
 
-  // AI Providers
+  // AI Providers (primary stack — all free tier)
+  MISTRAL_API_KEY: z.string().optional(), // https://console.mistral.ai
+  GEMINI_API_KEY: z.string().optional(), // https://aistudio.google.com
+  DEEPGRAM_API_KEY: z.string().optional(), // https://deepgram.com
+
+  // Legacy / fallback providers (kept for pipeline compat)
   OPENAI_API_KEY: z.string().optional(),
-  GEMINI_API_KEY: z.string().optional(),
   NVIDIA_API_KEY: z.string().optional(),
   REPLICATE_API_KEY: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
@@ -39,3 +43,5 @@ function parseEnv() {
 
 export const env = parseEnv();
 export const isDemo = !env.B2_KEY_ID || env.B2_KEY_ID === "demo";
+/** True when a real Mistral key is present — enables real RAG/chat/overview. */
+export const isMistralEnabled = Boolean(env.MISTRAL_API_KEY && env.MISTRAL_API_KEY.length > 8);

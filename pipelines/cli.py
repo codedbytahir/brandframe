@@ -535,8 +535,39 @@ def step_chunk(video_id: str, asr_result: StepResult, scenes_result: StepResult)
 
 
 # =====================================================================
-# STEP 7 — Embed (BGE-M3 + CLIP → LanceDB)
+# STEP 7 — Embed (BGE-M3 + CLIP → LanceDB + JSON sidecar)
 # =====================================================================
+def build_index_sidecar(chunks: list[dict], dense_embeddings, model: str) -> dict:
+    """Portable vector-index sidecar uploaded to `index/<videoId>/segments.json`.
+
+    The Node app reads this for dense retrieval — no native LanceDB binding
+    needed at query time (see DECISIONS.md). Embeddings are L2-normalized and
+    rounded to 6dp to keep the payload small.
+    """
+    import math
+
+    segments = []
+    for ch, emb in zip(chunks, dense_embeddings):
+        vec = [float(x) for x in emb]
+        norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+        vec = [round(x / norm, 6) for x in vec]
+        segments.append(
+            {
+                "index": ch["index"],
+                "start_ms": ch["start_ms"],
+                "end_ms": ch["end_ms"],
+                "text": ch["text"],
+                "embedding": vec,
+            }
+        )
+    return {
+        "version": 1,
+        "model": model,
+        "dim": len(segments[0]["embedding"]) if segments else 0,
+        "segments": segments,
+    }
+
+
 def step_embed(video_id: str, chunk_result: StepResult) -> StepResult:
     t0 = time.time()
     log("progress", step="embed", status="running", progress=67,
@@ -544,6 +575,7 @@ def step_embed(video_id: str, chunk_result: StepResult) -> StepResult:
 
     chunks = chunk_result.data.get("chunks", [])
     texts = [ch["text"] for ch in chunks]
+    dense_model_name = None  # tracks which model produced dense_emb
 
     try:
         from sentence_transformers import SentenceTransformer
@@ -552,6 +584,7 @@ def step_embed(video_id: str, chunk_result: StepResult) -> StepResult:
             message="Loading BGE-M3...")
         dense_model = SentenceTransformer("BAAI/bge-m3", device="cpu")
         dense_emb = dense_model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+        dense_model_name = "BAAI/bge-m3"
 
         log("progress", step="embed", status="running", progress=75,
             message="Loading CLIP...")
@@ -594,6 +627,7 @@ def step_embed(video_id: str, chunk_result: StepResult) -> StepResult:
             message=f"Local embedding failed ({exc}), using Mistral Embed API...")
         try:
             dense_emb = mistral_embed(texts)
+            dense_model_name = "mistral-embed"
             status = "fallback"
             provider = "mistral"
             model_name = "mistral-embed"
@@ -603,6 +637,21 @@ def step_embed(video_id: str, chunk_result: StepResult) -> StepResult:
             return StepResult(step="embed", status="failed", provider="embedding",
                               error=f"All embedding methods failed: {exc2}",
                               duration_ms=int((time.time()-t0)*1000))
+
+    # Portable index sidecar — written on BOTH paths (previously the Mistral
+    # fallback vectors were computed then silently discarded, leaving the
+    # search index empty). Consumed by src/lib/rag/corpus.ts at query time.
+    try:
+        sidecar = build_index_sidecar(chunks, dense_emb, dense_model_name)
+        sidecar_key = f"index/{video_id}/segments.json"
+        put_object_to_b2(
+            json.dumps(sidecar).encode("utf-8"), sidecar_key, "application/json"
+        )
+        log("progress", step="embed", status="running", progress=80,
+            message=f"Index sidecar uploaded to {sidecar_key} (model={dense_model_name})")
+    except Exception as exc:
+        log("progress", step="embed", status="running", progress=80,
+            message=f"⚠ sidecar upload failed (search degraded for this video): {exc}")
 
     result = StepResult(
         step="embed", status=status, provider=provider, model=model_name,

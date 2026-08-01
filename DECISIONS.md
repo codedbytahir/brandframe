@@ -149,3 +149,53 @@ Python writes one JSON object per line to stdout (`_log(event, …)`). Node's `r
 - No extra infra. Works on a single server instance.
 - In-memory buffer doesn't survive Next.js restarts; acceptable for v1 (demo can be re-run). The pipeline can also write a sidecar log to B2 `tmp/<videoId>/pipeline.log` for restart recovery if needed.
 - If we later deploy to Vercel, SSE + long-lived spawn may require a separate Node server (Fly.io). Document this but don't implement until it's a real problem.
+
+## ADR-011 — HLS served via same-origin B2 proxy route, not presigned URLs
+### Context
+B2 buckets with Object Lock should stay private. The S3-Compatible API
+(backblaze.com/apidocs) can presign a GET for exactly ONE object — but an HLS
+master playlist references variant playlists and segments by *relative* URI,
+and hls.js fetches those without any signature. Native `b2_get_download_authorization`
+tokens likewise don't propagate through relative playlist URIs.
+### Decision
+Added `GET /api/playback/[videoId]/file/[...path]`: a Node-runtime streaming
+proxy mapping to `playable/<id>/<path>` in the bucket. Passes Range headers
+through (206 partial content), sets HLS-correct content types, no-cache for
+`.m3u8` and immutable caching for segments, guards path traversal and video
+status. Demo mode (no B2 keys) bypasses the proxy entirely via `video.hlsUrl`.
+### Consequences
+Bucket stays private; browser needs no B2 CORS config; slight server bandwidth
+cost per stream. If bandwidth ever matters, add a short-TTL signed-URL fast path
+for `.ts` segments inside rewritten playlists.
+
+## ADR-012 — Query-side RAG: mistral-embed + JSON index sidecar (no native LanceDB in Node)
+### Context
+Spec wants LanceDB-on-B2 reads from Node. The native `@lancedb/lancedb` binding
+adds binary install risk (serverless + hackathon machines) and model-mismatch
+risk between local BGE-M3 writes and Node-side query vectors.
+### Decision
+The Python `embed` step now also writes `index/<videoId>/segments.json`
+(L2-normalized vectors + timing + text) on BOTH the local-model and
+Mistral-fallback paths (previously fallback vectors were silently discarded).
+Node (`src/lib/rag/`) loads segments from SQLite, merges sidecar vectors when
+models match, otherwise embeds segments with `mistral-embed` and caches them in
+the new `segment_embeddings` table. Retrieval = 0.5 dense + 0.2 BM25
+(min-max normalized) → top-20 → token-F1 rerank → top-N, per spec; CLIP
+query-vectors skipped per spec §2.
+### Consequences
+Zero native deps at query time, works on Vercel, provable retrieval path even
+without keys (BM25-only fallback, then demo stubs). The LanceDB/parquet write
+in the pipeline stays for future local reranker/CLIP work.
+
+## ADR-013 — Chat uses AI SDK text-stream protocol (not data-stream)
+### Context
+`/api/chat` must degrade gracefully when `MISTRAL_API_KEY` is absent (demo
+machines, juries without keys).
+### Decision
+Client `useChat` uses `streamProtocol: "text"`; the route returns
+`toTextStreamResponse()` for real Mistral `streamText` answers and a manual
+ReadableStream of a DB-grounded answer (with real `<ts ms>` citation tags) in
+demo mode. Same wire format both ways.
+### Consequences
+One code path, no protocol branch in the client, citations/seek chips work in
+both modes. We forgo tool-call/data-stream extras we weren't using.

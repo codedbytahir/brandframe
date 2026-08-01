@@ -67,6 +67,14 @@ export const adSlots = sqliteTable("ad_slots", {
   updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
 });
 
+export const segmentEmbeddings = sqliteTable("segment_embeddings", {
+  segmentId: text("segment_id").primaryKey().references(() => segments.id),
+  model: text("model").notNull(), // e.g. "mistral-embed"
+  dim: integer("dim").notNull(),
+  vector: text("vector").notNull(), // JSON number[] (L2-normalized)
+  createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
 export const naturalBreaks = sqliteTable("natural_breaks", {
   id: text("id").primaryKey(), // brk_<id>
   videoId: text("video_id").notNull().references(() => videos.id),

@@ -156,6 +156,40 @@ brandframe/
 
 ## 8. Session log (append new entries at top)
 
+### 2026-08-01 — Phase 4 REAL wiring complete (this agent)
+Found TASKS.md was accurate and the prior "Phase 4 done" handover was optimistic: search/
+chat/overview were stubs, watch/search pages hard-coded, chat panel fake, player on the
+mux test stream, only 1 seeded video. Completed Phase 4 for real:
+- `src/lib/rag/`: `corpus.ts` (SQLite + B2 sidecar), `embed.ts` (mistral-embed + SQLite
+  cache, new `segment_embeddings` table — run `npx drizzle-kit push`), `bm25.ts` (BM25 +
+  token-F1 rerank), `search.ts` (0.5 dense/0.2 BM25 hybrid, Mistral `generateText`
+  overview with `[N](t:MM:SS)` citations; fallbacks: BM25-only → demo stubs).
+- `/api/chat`: real `streamText` (mistral-large-latest) + RAG system prompt with
+  `<ts ms>` instructions; text-stream protocol; demo mode streams DB-grounded answers.
+- Chat panel: `useChat` (ai/react), `<ts>` chips seek player (custom event
+  `brandframe:seek` + `router.push ?t=`); new `ui/tabs.tsx` (radix).
+- Playback: same-origin B2 HLS proxy `/api/playback/[videoId]/file/[...path]` (Range,
+  206, content-types; see ADR-011), main playback route returns proxy URL in real mode /
+  DB `hlsUrl` in demo; new `/api/captions/[videoId]` (WebVTT from segments).
+- Player: resolves source via API, split source/seek effects, seek-event listener,
+  keyboard shortcuts (←/→ space/k f m), captions track, 409 poll while processing,
+  crossfade pause-ad wired from DB cues.
+- Watch page: real video/segments/slots from DB, sidebar tabs (AI Chat | Chapters |
+  About), `?t=` and `?segment=` deep links, `notFound()` on unknown id.
+- Search page: real results, `<mark>`, AI Overview (Suspense+Skeleton), citation chips.
+- Python `step_embed`: writes `index/<videoId>/segments.json` sidecar on BOTH paths
+  (fallback vectors were previously discarded); `build_index_sidecar` + unit test.
+- Seeds: 5 videos / 21 segments / 16 breaks / 4 slots (`scripts/seed-demo-data.py`).
+- Docs: TASKS.md Phase 4 ticked; ADR-011 (HLS proxy), ADR-012 (sidecar RAG), ADR-013
+  (text-stream chat).
+- Verified: `drizzle-kit push`, both seed scripts, `python3 tests/test_pipeline.py` (7 ✓),
+  `npm run typecheck` clean, `npm run build` clean, live smoke tests of search/playback/
+  captions/chat/search-page/watch-page in demo mode (BM25 search 3–7 ms).
+- NOT YET: live test with real MISTRAL_API_KEY + B2 creds (sandbox has no keys) — the
+  dense leg, Mistral chat/overview, and B2 proxy are coded but only the fallbacks were
+  exercised. Next session: add keys to `.env`, re-verify, then Phase 7 submission work
+  (README, demo video, Devpost).
+
 ### 2026-07-26 — Initial scaffold + spec suite (prior agent + this agent)
 - Bootstrapped repo with Next 15, Tailwind, Drizzle, Radix primitives.
 - Scaffolded marketing, search, watch, studio, verify pages (all stubs with demo data).
