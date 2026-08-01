@@ -83,10 +83,13 @@ Spec: `docs/specs/10-provenance.md`.
 - [x] Player "Why?" link → `/verify/<id>#slot-<slotId>` deep-scroll (scroll-mt set)
 
 ## Phase 7 — Polish & Submission (deadline Aug 3, 5PM EDT)
-- [ ] Demo corpus: 5 CC-licensed tutorials ingested, 5 mock brands
+- [x] Demo corpus: 5 tutorials + 5 mock brands (21 segments, 16 breaks, 4 slots)
+- [x] **Pixel-art brand identity (2026-08-01):** logo mark (film-frame + play glyph + sparkle), hero, 3 feature illustrations, pipeline illustration — 16-bit pixel style, WebP-optimized (~460KB total), favicon via `src/app/icon.png`
+- [x] **Landing page rebuilt:** hero + stats strip, 3 feature deep-links, 13-step pipeline explainer (Ingest/Understand/Monetize/Prove), 3-layer ad-engine section, "try it live" demo links (watch w/ ad cues, chat, approvals, upload), FTC/EU-AI-Act trust note. Removed Safari-only raw-HLS demo card
+- [x] **Header/footer enriched:** logo + Verify nav link, footer quick links (Provenance, Approvals, GitHub)
+- [x] Empty/error states verified: playback 409 VIDEO_NOT_READY (tested w/ temp row), search empty/no-results, verify no-manifest & 404, chat fallback, empty approval queue — all render correctly
 - [ ] Final README pass with architecture diagram + quickstart
 - [ ] A11y pass: keyboard nav, ARIA, contrast, captions toggle, no color-only states
-- [ ] Empty/error states filled
 - [ ] Deploy: Vercel (Next.js) + Fly.io worker if needed
 - [ ] Record 3-min demo video per SRS script
 - [ ] Devpost submission (features, providers list, screenshots, demo link, repo with `b2genblaze` collaborator)

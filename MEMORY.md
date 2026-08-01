@@ -156,6 +156,21 @@ brandframe/
 
 ## 8. Session log (append new entries at top)
 
+### 2026-08-01 (Phase 7a) — Brand identity + landing + QA sweep (this agent)
+- Pixel-art identity generated & shipped: `public/brand/{logo,hero,pipeline,feat-search,
+  feat-ads,feat-verify}.webp` (9.4MB → ~460KB via downscale+WebP), favicon `src/app/icon.png`,
+  `.pixelated`/`.pixel-frame` utilities in globals.css.
+- Landing page fully rewritten (hero w/ stats, 3 feature cards → deep demo links,
+  13-step pipeline explainer, 3-layer ad section, live-demo grid, FTC/EU trust note);
+  broken Safari-only raw-HLS demo card removed. Header/footer got logo + Verify link.
+- QA sweep: 409 VIDEO_NOT_READY path (temp row), 404s (playback/verify/watch ghosts),
+  search ranking (useEffect → seg_203 ✓), chat `<ts>` stream, captions VTT, cue planner
+  logs, approval queue (8 approve buttons), 8/8 pipeline tests, intent tuning — brand
+  copies hardened (soda/soft drink → DemoCola now matches; coffee/laptop/cereal/books
+  re-verified).
+- QA lessons: React HTML comment markers around interpolations break exact-string grep
+  checks — flight payload carries the authoritative strings.
+
 ### 2026-08-01 (latest) — Phase 6 REAL wiring complete (this agent)
 Verify page was a hard-coded green banner with fake timeline. Now real:
 - `src/lib/provenance/verify.ts`: real B2 verification — fetch manifest bytes,

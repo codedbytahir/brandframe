@@ -14,7 +14,7 @@ BRANDS = [
         "category": "beverage",
         "logoUrl": "https://images.unsplash.com/photo-1554866585-cd94860890b7?w=200",
         "packshotUrl": "https://images.unsplash.com/photo-1554866585-cd94860890b7?w=800",
-        "copy": "Ice-cold refreshment for every coding session. Crack open a DemoCola.",
+        "copy": "Ice-cold soda and soft drinks for every coding session. Crack open a DemoCola.",
         "targetUrl": "https://example.com/democola",
         "colorHex": "#e63946",
         "allowedSurfaces": ["can", "bottle"],
