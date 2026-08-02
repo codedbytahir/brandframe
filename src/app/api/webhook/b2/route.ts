@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { videos } from "@/lib/db/schema";
-import { runIngestPipeline } from "@/lib/pipelines/run";
-import { addPipelineLog } from "@/lib/pipelines/logs";
+import { startIngestPipeline } from "@/lib/pipelines/start";
 
 export async function POST(req: NextRequest) {
   try {
@@ -33,37 +29,7 @@ export async function POST(req: NextRequest) {
     }
 
     const videoId = match[1];
-
-    // Update video status to processing
-    const now = new Date().toISOString();
-    await db.update(videos)
-      .set({ status: "processing", updatedAt: now })
-      .where(eq(videos.id, videoId));
-
-    addPipelineLog(videoId, JSON.stringify({ event: "progress", step: "init", status: "running", progress: 0, message: "Starting pipeline from B2 webhook..." }));
-
-    // Spawn pipeline asynchronously
-    const cancel = runIngestPipeline(
-      videoId,
-      key,
-      (progress) => {
-        addPipelineLog(videoId, JSON.stringify({ event: "progress", ...progress }));
-      },
-      (error) => {
-        addPipelineLog(videoId, JSON.stringify({ event: "error", error }));
-        db.update(videos)
-          .set({ status: "failed", updatedAt: new Date().toISOString() })
-          .where(eq(videos.id, videoId))
-          .catch(console.error);
-      },
-      async (result) => {
-        addPipelineLog(videoId, JSON.stringify({ event: "complete", data: result }));
-        const finalStatus = result.success ? "ready" : "failed";
-        await db.update(videos)
-          .set({ status: finalStatus, updatedAt: new Date().toISOString() })
-          .where(eq(videos.id, videoId));
-      }
-    );
+    await startIngestPipeline(videoId, key);
 
     return NextResponse.json({ status: "processing", videoId });
   } catch (error) {

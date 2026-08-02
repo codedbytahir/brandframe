@@ -1,12 +1,15 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Upload, Play, CheckCircle, XCircle, Loader2 } from "lucide-react";
+import { Upload, Play, CheckCircle, XCircle, Loader2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+
+/** 15 minutes in milliseconds */
+const STALE_THRESHOLD_MS = 15 * 60 * 1000;
 
 interface VideoRecord {
   id: string;
@@ -14,6 +17,8 @@ interface VideoRecord {
   filename: string;
   status: string;
   uploadProgress: number;
+  updatedAt?: string;
+  staleMessage?: string;
 }
 
 interface PipelineStep {
@@ -38,6 +43,21 @@ export default function StudioPage() {
     return () => {
       eventSourceRef.current?.close();
     };
+  }, []);
+
+  // Guard: mark stale videos (uploading/processing > 15 min) as failed
+  useEffect(() => {
+    setVideos((prev) =>
+      prev.map((v) => {
+        if (v.status !== "uploading" && v.status !== "processing") return v;
+        if (!v.updatedAt) return v;
+        const age = Date.now() - new Date(v.updatedAt).getTime();
+        if (age > STALE_THRESHOLD_MS) {
+          return { ...v, status: "failed", staleMessage: "Pipeline never started — try re-uploading" };
+        }
+        return v;
+      })
+    );
   }, []);
 
   const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -76,6 +96,7 @@ export default function StudioPage() {
         filename: file.name,
         status: uploadData.isDemo ? "processing" : "uploading",
         uploadProgress: 0,
+        updatedAt: new Date().toISOString(),
       };
       setVideos((prev) => [record, ...prev]);
 
@@ -108,12 +129,30 @@ export default function StudioPage() {
             }
           };
 
-          xhr.onload = () => {
+          xhr.onload = async () => {
             if (xhr.status >= 200 && xhr.status < 300) {
               setUploadProgress(100);
               setVideos((prev) =>
                 prev.map((v) => (v.id === videoId ? { ...v, status: "processing", uploadProgress: 100 } : v))
               );
+              // Trigger the ingest pipeline on the server
+              try {
+                const pipelineRes = await fetch(`/api/pipelines/${videoId}`, { method: "POST" });
+                if (!pipelineRes.ok) {
+                  const errData = await pipelineRes.json().catch(() => ({ error: "Pipeline start failed" }));
+                  setVideos((prev) =>
+                    prev.map((v) => (v.id === videoId ? { ...v, status: "failed" } : v))
+                  );
+                  reject(new Error(errData.error || `Pipeline start failed: ${pipelineRes.status}`));
+                  return;
+                }
+              } catch (err) {
+                setVideos((prev) =>
+                  prev.map((v) => (v.id === videoId ? { ...v, status: "failed" } : v))
+                );
+                reject(err instanceof Error ? err : new Error("Pipeline start failed"));
+                return;
+              }
               // Start SSE for pipeline progress
               startPipelineSSE(videoId);
               resolve();
@@ -176,6 +215,19 @@ export default function StudioPage() {
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+
+        // Terminal "done" event from the server
+        if (data.done) {
+          const finalStatus = data.status || "ready";
+          setVideos((prev) =>
+            prev.map((v) =>
+              v.id === videoId ? { ...v, status: finalStatus } : v
+            )
+          );
+          es.close();
+          return;
+        }
+
         if (data.line) {
           const parsed = JSON.parse(data.line);
           if (parsed.event === "progress") {
@@ -200,7 +252,7 @@ export default function StudioPage() {
             );
           }
           if (parsed.event === "complete") {
-            es.close();
+            // Server will send "done" shortly; let that handle cleanup
           }
         }
       } catch {}
@@ -330,6 +382,12 @@ export default function StudioPage() {
                   <div className="flex-1">
                     <p className="font-medium">{v.title}</p>
                     <p className="text-xs text-muted-foreground font-mono">{v.id}</p>
+                    {v.staleMessage && (
+                      <p className="mt-1 flex items-center gap-1 text-xs text-amber-500">
+                        <AlertTriangle className="h-3 w-3" />
+                        {v.staleMessage}
+                      </p>
+                    )}
                     {v.status === "processing" && (
                       <Progress value={v.uploadProgress || 0} className="mt-1 h-1" />
                     )}

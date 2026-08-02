@@ -1,0 +1,94 @@
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { videos } from "@/lib/db/schema";
+import { runIngestPipeline } from "@/lib/pipelines/run";
+import { addPipelineLog } from "@/lib/pipelines/logs";
+
+/** Track running pipelines to prevent duplicate starts */
+const runningPipelines = new Set<string>();
+
+/**
+ * Returns true if a pipeline is currently running for the given videoId.
+ */
+export function isPipelineRunning(videoId: string): boolean {
+  return runningPipelines.has(videoId);
+}
+
+/**
+ * Start the ingest pipeline for a video. No-op if already running.
+ * Sets status to "processing", spawns the Python child process,
+ * and wires progress/error/complete callbacks to DB + log buffer.
+ *
+ * Returns true if the pipeline was started, false if it was already running.
+ */
+export async function startIngestPipeline(
+  videoId: string,
+  b2Key: string
+): Promise<boolean> {
+  if (runningPipelines.has(videoId)) {
+    return false;
+  }
+  runningPipelines.add(videoId);
+
+  // Set video status to processing
+  const now = new Date().toISOString();
+  await db
+    .update(videos)
+    .set({ status: "processing", updatedAt: now })
+    .where(eq(videos.id, videoId));
+
+  addPipelineLog(
+    videoId,
+    JSON.stringify({
+      event: "progress",
+      step: "init",
+      status: "running",
+      progress: 0,
+      message: "Starting ingest pipeline...",
+    })
+  );
+
+  runIngestPipeline(
+    videoId,
+    b2Key,
+    (progress) => {
+      addPipelineLog(
+        videoId,
+        JSON.stringify({ event: "progress", ...progress })
+      );
+    },
+    (error) => {
+      addPipelineLog(videoId, JSON.stringify({ event: "error", error }));
+      db.update(videos)
+        .set({ status: "failed", updatedAt: new Date().toISOString() })
+        .where(eq(videos.id, videoId))
+        .then(() => runningPipelines.delete(videoId))
+        .catch((err) => {
+          console.error("Failed to update video status:", err);
+          runningPipelines.delete(videoId);
+        });
+    },
+    async (result) => {
+      addPipelineLog(
+        videoId,
+        JSON.stringify({ event: "complete", data: result })
+      );
+      const finalStatus = result.success ? "ready" : "failed";
+      try {
+        await db
+          .update(videos)
+          .set({
+            status: finalStatus,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(videos.id, videoId));
+      } catch (err) {
+        console.error("Failed to update video status:", err);
+      } finally {
+        runningPipelines.delete(videoId);
+      }
+    }
+  );
+
+  return true;
+}
