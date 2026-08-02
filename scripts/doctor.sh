@@ -42,10 +42,14 @@ if [ -x .venv/bin/python ]; then
     .venv/bin/python -c "import $mod" >/dev/null 2>&1 || MISSING="$MISSING $mod"
   done
   if [ -z "$MISSING" ]; then ok "all pipeline modules import"; else bad "missing python modules:$MISSING → run: npm run pipelines:install"; fi
-  if .venv/bin/python -c "import nltk; nltk.data.find('tokenizers/punkt')" >/dev/null 2>&1; then
-    ok "nltk punkt data"
+  NLTK_MISSING=""
+  for res in tokenizers/punkt tokenizers/punkt_tab; do
+    .venv/bin/python -c "import nltk; nltk.data.find('$res')" >/dev/null 2>&1 || NLTK_MISSING="$NLTK_MISSING $res"
+  done
+  if [ -z "$NLTK_MISSING" ]; then
+    ok "nltk punkt + punkt_tab data"
   else
-    bad "nltk punkt data missing → run: .venv/bin/python -c \"import nltk; nltk.download('punkt')\""
+    bad "nltk data missing:$NLTK_MISSING → run: .venv/bin/python -c \"import nltk; [nltk.download(p) for p in ('punkt','punkt_tab')]\""
   fi
   if PYTHONSAFEPATH=1 PYTHONPATH="$(pwd)" .venv/bin/python -m pipelines.cli ingest --help >/dev/null 2>&1; then
     ok "pipeline entrypoint boots (python -m pipelines.cli)"

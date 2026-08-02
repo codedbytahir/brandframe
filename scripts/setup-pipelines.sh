@@ -13,10 +13,11 @@ echo "Installing pipeline dependencies..."
 "$VENV_DIR/bin/pip" install -r pipelines/requirements.txt
 
 echo "Downloading NLTK data..."
-# Kill switch for nltk >= 3.10's overzealous import guard (misfires on
-# in-project venvs). requirements.txt pins nltk<3.10, but be safe either way.
+# nltk >= 3.9 needs BOTH packages: 'punkt' (legacy pickle format) and
+# 'punkt_tab' (pickle-free tables — what sent_tokenize actually loads in
+# 3.9.x; missing it hard-fails with "Resource 'punkt_tab' not found").
 NLTK_DISABLE_IMPORT_SECURITY=1 PYTHONSAFEPATH=1 PYTHONPATH="$(pwd)" \
-  "$VENV_DIR/bin/python" -c "import nltk; nltk.download('punkt', quiet=True)"
+  "$VENV_DIR/bin/python" -c "import nltk; [nltk.download(p, quiet=True) for p in ('punkt', 'punkt_tab')]"
 
 # ffmpeg is a system binary (not pip-installable) that the pipeline requires.
 echo "Checking ffmpeg..."
