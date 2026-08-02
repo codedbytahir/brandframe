@@ -224,6 +224,15 @@ export default function StudioPage() {
               v.id === videoId ? { ...v, status: finalStatus } : v
             )
           );
+          // Flip any still-spinning step rows (e.g. init, or steps whose final
+          // status event never arrived) to their terminal state.
+          setPipelineSteps((prev) =>
+            prev.map((s) =>
+              s.status === "running" || s.status === "fallback"
+                ? { ...s, status: finalStatus === "ready" ? "completed" : "failed" }
+                : s
+            )
+          );
           es.close();
           return;
         }
