@@ -16,8 +16,8 @@ All env vars are declared in `.env.example` and validated at boot.
 | `B2_KEY_ID` | yes | — | B2 application key ID (create at backblaze.com → App Keys. Limit to the single bucket if possible.) |
 | `B2_APP_KEY` | yes | — | B2 application key secret. |
 | `B2_BUCKET` | yes | — | Bucket name, e.g. `brandframe-demo`. Bucket **must** be created with Object Lock enabled. |
-| `B2_REGION` | no | `us-west-004` | Region portion of the endpoint. |
-| `B2_ENDPOINT` | no | `s3.us-west-004.backblazeb2.com` | S3-compatible endpoint hostname (no `https://` prefix — added by code). |
+| `B2_REGION` | no | `us-east-005` | Region portion of the endpoint. |
+| `B2_ENDPOINT` | no | `s3.us-east-005.backblazeb2.com` | S3-compatible endpoint hostname (no `https://` prefix — added by code). |
 
 Public URL pattern derived from these: `https://f004.backblazeb2.com/file/<bucket>/<key>` (the `004` is the last segment of `B2_REGION` split on `-`).
 
@@ -86,8 +86,8 @@ Keep `.env.example` in sync with this spec. It currently lists:
 B2_KEY_ID=
 B2_APP_KEY=
 B2_BUCKET=brandframe-demo
-B2_REGION=us-west-004
-B2_ENDPOINT=s3.us-west-004.backblazeb2.com
+B2_REGION=us-east-005
+B2_ENDPOINT=s3.us-east-005.backblazeb2.com
 MISTRAL_API_KEY=
 GEMINI_API_KEY=
 DEEPGRAM_API_KEY=

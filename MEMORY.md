@@ -85,7 +85,7 @@ npm run lint
 - **3 ad layers with caps** — no "100 ads/10 min". Layer 3 max 1 per 3–5 min.
 - **Inanimate-object slots only** (mug, laptop_lid, can, bottle, blank_sign, cereal_box, book_cover, screen). Face/hand rejection via MediaPipe.
 - **Hybrid RAG: 0.5 dense (BGE-M3) + 0.2 BM25 + 0.3 visual (CLIP ViT-B/32)** → bge-reranker-v2-m3.
-- **B2 us-west-004, bucket with Object Lock ENABLED (must be set at creation).**
+- **B2 us-east-005, bucket with Object Lock ENABLED (must be set at creation).**
 - **Manifest retention: 365 days COMPLIANCE; inpainted frames 365 days GOVERNANCE.**
 - **Dark theme by default; brand orange #f15a22.**
 - **No real auth for v1** — demo user cookie stub; add NextAuth only if Phase 7 has time.
@@ -155,6 +155,17 @@ brandframe/
 - **Python venv path** is configurable via `PIPELINE_VENV` env (default `.venv`).
 
 ## 8. Session log (append new entries at top)
+
+### 2026-08-02 — Live ingest hardened: manual trigger (Antigravity) + regex-crash fix (this agent)
+- User/Antigravity added: `POST /api/pipelines/[videoId]` manual start (idempotent — blocked for `processing`/`ready`, allowed for `failed`), `src/lib/pipelines/start.ts` shared starter (webhook refactored to use it), SSE tailing with 1s diff + `done` terminal event, stale-video guard in Studio (>15 min in uploading/processing → amber warning).
+- This agent fixed the next two runtime failures found live on Codespaces:
+  1. **`ffprobe` missing** → probe crash → added ffmpeg detect+auto-install to `scripts/setup-pipelines.sh` (apt/brew w/ warnings), and human-friendly `RuntimeError` from `_run_checked()` in `pipelines/utils.py` (all 3 ffmpeg/ffprobe call sites + cli.py audio extract).
+  2. **`Blocked import of regex from current working directory`** → patched CPython (Ubuntu 24.04 py3.12 on Codespaces) refuses CWD imports; `-m` prepends cwd. Fix: spawn env `PYTHONSAFEPATH=1` + `PYTHONPATH=<projectRoot>` in `run.ts` (no `-P` flag — absent on <3.11).
+- Also hardened `run.ts`: stdout+stderr both line-buffered through the same JSONL parser; non-JSON noise (nltk/tqdm/warnings) → new optional `onRawLine` callback → `start.ts` logs as `{event:"raw"}` (SSE replays, client ignores) instead of flipping videos to `failed`. `terminalEventSeen` guard prevents double-fail (error event + non-zero exit).
+- Repo hygiene: `tsconfig.tsbuildinfo` untracked + `*.tsbuildinfo` gitignored; B2 region synced `us-west-004`→`us-east-005` (user's real bucket) across specs 01/02/03/11 + this file.
+- GitHub Push Protection blocked user's push (real key pasted in `.env.example`) — amended out; keys belong in `.env`/Codespace secrets only.
+- Verified: 8/8 pipeline tests, typecheck, build (13 pages), spawn env smoke (`PYTHONSAFEPATH=1 python -m pipelines.cli` resolves), POST guards (ready→no respawn, unknown→404), SSE terminal `done` on connect.
+- Pushed as this branch's HEAD after `2ce152d` (Antigravity commit).
 
 ### 2026-08-01 (Phase 7a) — Brand identity + landing + QA sweep (this agent)
 - Pixel-art identity generated & shipped: `public/brand/{logo,hero,pipeline,feat-search,

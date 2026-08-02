@@ -87,6 +87,12 @@ export async function startIngestPipeline(
       } finally {
         runningPipelines.delete(videoId);
       }
+    },
+    // Raw stdout/stderr noise (warnings, progress bars, nltk logs) — keep in
+    // the log buffer for SSE replay/debugging, but never fail the video on it.
+    // The SSE client ignores unknown "raw" events.
+    (line, source) => {
+      addPipelineLog(videoId, JSON.stringify({ event: "raw", source, line }));
     }
   );
 

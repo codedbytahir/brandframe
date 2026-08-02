@@ -144,7 +144,7 @@ Format: `<type>(<scope>): <imperative summary>`
   - `feat(player): pause-ad overlay with disclosure badge`
   - `pipeline(embed): wire BGE-M3 dense+sparse embeddings to LanceDB`
   - `docs(specs): add ad-engine spec`
-  - `fix(b2): add forcePathStyle for us-west-004 endpoint`
+  - `fix(b2): add forcePathStyle for us-east-005 endpoint`
 
 ## 12. DoD (Definition of Done) for any task
 

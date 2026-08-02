@@ -120,7 +120,7 @@
   can't keep `.venv/`, add a tiny Fly.io worker for `/api/webhook/b2` + `/api/pipelines/[videoId]`,
   but prefer running locally for the demo recording and use Vercel for the public URL with
   a deployed pipeline worker as fallback. Decision tracked in `DECISIONS.md`.
-- **B2:** Single bucket `brandframe-<handle>` in `us-west-004`. Object Lock enabled at bucket creation (can't be added later). Lifecycle rule: `tmp/` expires after 48 hours. Event Notifications: `ObjectCreated: uploads/*` → Vercel/Fly webhook URL.
+- **B2:** Single bucket `brandframe-<handle>` in `us-east-005`. Object Lock enabled at bucket creation (can't be added later). Lifecycle rule: `tmp/` expires after 48 hours. Event Notifications: `ObjectCreated: uploads/*` → Vercel/Fly webhook URL.
 - **SQLite:** Local `brandframe.db` for dev; for Vercel deploy use Turso/libsql cloud (swap `DATABASE_URL`). No schema changes needed.
 - **LanceDB:** Lives on B2 under `index/`. Opened from Next.js via `lancedb.connect('s3://bucket/index', { storageOptions })` OR from Python via `s3fs`. **Single-writer (Python ingest) / multi-reader (Next search).**
 - **Python venv:** created by `scripts/setup-pipelines.sh`, not committed.

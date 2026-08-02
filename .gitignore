@@ -27,6 +27,9 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Build cache
+*.tsbuildinfo
+
 # Dependencies
 node_modules/
 

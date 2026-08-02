@@ -176,7 +176,9 @@ def step_asr(video_id: str, b2_key: str) -> StepResult:
 
     download_from_b2(b2_key, local_src)
 
-    subprocess.run([
+    from pipelines.utils import _run_checked
+
+    _run_checked([
         "ffmpeg", "-y", "-i", local_src,
         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
         audio_path,

@@ -15,4 +15,22 @@ echo "Installing pipeline dependencies..."
 echo "Downloading NLTK data..."
 "$VENV_DIR/bin/python" -c "import nltk; nltk.download('punkt', quiet=True)"
 
+# ffmpeg is a system binary (not pip-installable) that the pipeline requires.
+echo "Checking ffmpeg..."
+if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+  echo "ffmpeg found: $(ffmpeg -version 2>/dev/null | head -1)"
+else
+  echo "ffmpeg not found — attempting to install..."
+  if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+    sudo apt-get update -qq && sudo apt-get install -y ffmpeg \
+      || echo "WARNING: apt-get install failed — install ffmpeg manually before running ingest."
+  elif command -v brew >/dev/null 2>&1; then
+    brew install ffmpeg \
+      || echo "WARNING: brew install failed — install ffmpeg manually before running ingest."
+  else
+    echo "WARNING: could not auto-install ffmpeg (no apt-get/brew)."
+    echo "Install it manually — the pipeline needs BOTH ffmpeg and ffprobe on PATH."
+  fi
+fi
+
 echo "Done! Pipeline venv ready at $VENV_DIR"

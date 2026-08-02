@@ -88,6 +88,7 @@ Spec: `docs/specs/10-provenance.md`.
 - [x] **Landing page rebuilt:** hero + stats strip, 3 feature deep-links, 13-step pipeline explainer (Ingest/Understand/Monetize/Prove), 3-layer ad-engine section, "try it live" demo links (watch w/ ad cues, chat, approvals, upload), FTC/EU-AI-Act trust note. Removed Safari-only raw-HLS demo card
 - [x] **Header/footer enriched:** logo + Verify nav link, footer quick links (Provenance, Approvals, GitHub)
 - [x] Empty/error states verified: playback 409 VIDEO_NOT_READY (tested w/ temp row), search empty/no-results, verify no-manifest & 404, chat fallback, empty approval queue — all render correctly
+- [x] **Live ingest path fixed E2E (2026-08-02):** manual `POST /api/pipelines/[videoId]` start (works without B2 event notifications — Codespaces/localhost), SSE live tailing + `done` event, stale-upload guard (Antigravity collab); `PYTHONSAFEPATH`+`PYTHONPATH` spawn fix for patched-CPython "blocked import (regex)" crash; ffmpeg auto-install in `setup-pipelines.sh` + friendly missing-ffmpeg errors; run.ts stderr/stdout noise no longer false-fails videos (`onRawLine` → `{event:"raw"}` buffer entries)
 - [ ] Final README pass with architecture diagram + quickstart
 - [ ] A11y pass: keyboard nav, ARIA, contrast, captions toggle, no color-only states
 - [ ] Deploy: Vercel (Next.js) + Fly.io worker if needed

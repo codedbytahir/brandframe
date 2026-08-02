@@ -106,13 +106,22 @@ def clean_workspace():
     shutil.rmtree(WORKSPACE, ignore_errors=True)
 
 # ── ffmpeg helpers ──
+FFMPEG_INSTALL_HINT = (
+    "ffmpeg/ffprobe is not installed or not on PATH. "
+    "Debian/Ubuntu: sudo apt-get install -y ffmpeg | macOS: brew install ffmpeg"
+)
+
+
 def run_ffprobe(video_path: str) -> dict:
     """Run ffprobe and return parsed metadata."""
     cmd = [
         "ffprobe", "-v", "quiet", "-print_format", "json",
         "-show_format", "-show_streams", video_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError as e:
+        raise RuntimeError(FFMPEG_INSTALL_HINT) from e
     data = json.loads(result.stdout)
     streams = data.get("streams", [])
     fmt = data.get("format", {})
@@ -187,12 +196,20 @@ def run_ffmpeg_hls(input_path: str, output_dir: str) -> list[str]:
     with open(output_playlist, "w") as f:
         f.write("\n".join(master_lines) + "\n")
 
-    subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    _run_checked(cmd, capture_output=True, text=True, timeout=600)
     return generated_paths + [output_playlist]
+
+def _run_checked(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run, but with a human-friendly error when ffmpeg is missing."""
+    try:
+        return subprocess.run(cmd, **kwargs)
+    except FileNotFoundError as e:
+        raise RuntimeError(FFMPEG_INSTALL_HINT) from e
+
 
 def extract_poster(input_path: str, output_path: str, time_sec: float = 5.0):
     """Extract a poster frame at the given time."""
-    subprocess.run([
+    _run_checked([
         "ffmpeg", "-y", "-i", input_path,
         "-ss", str(time_sec),
         "-vframes", "1",
@@ -202,7 +219,7 @@ def extract_poster(input_path: str, output_path: str, time_sec: float = 5.0):
 
 def extract_keyframe(input_path: str, output_path: str, time_sec: float):
     """Extract a single keyframe at the given time."""
-    subprocess.run([
+    _run_checked([
         "ffmpeg", "-y", "-i", input_path,
         "-ss", str(time_sec),
         "-vframes", "1",

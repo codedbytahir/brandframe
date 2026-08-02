@@ -92,8 +92,8 @@ B2 is used for large payload interchange (keyframes, embeddings, HLS segments).
 
 ## 5. B2-specific choices
 
-- **Region:** `us-west-004` (default, cheap, close to US west for demo).
-- **Endpoint:** `s3.us-west-004.backblazeb2.com` (S3-compatible; always HTTPS).
+- **Region:** `us-east-005` (default, cheap, close to US west for demo).
+- **Endpoint:** `s3.us-east-005.backblazeb2.com` (S3-compatible; always HTTPS).
 - **Public URL pattern:** `https://f004.backblazeb2.com/file/<bucket>/<key>` (suffix is last segment of region split by `-`).
 - **Bucket settings** (must be set at creation for Object Lock):
   - Object Lock: **Enabled** (Compliance mode for manifests/, Governance optional for others).
