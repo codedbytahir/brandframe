@@ -8,6 +8,11 @@ cd "$(dirname "$0")/.."
 
 PASS=0
 FAIL=0
+# nltk >= 3.10's import guard blocks venv-internal imports when run from the
+# repo root; disable it for our python checks (no-op on nltk < 3.10).
+export NLTK_DISABLE_IMPORT_SECURITY=1
+export PYTHONSAFEPATH=1
+export PYTHONPATH="$(pwd)${PYTHONPATH:+:$PYTHONPATH}"
 ok()   { echo "  ✅ $1"; PASS=$((PASS+1)); }
 bad()  { echo "  ❌ $1"; FAIL=$((FAIL+1)); }
 warn() { echo "  ⚠️  $1"; }

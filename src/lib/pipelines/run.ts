@@ -47,12 +47,15 @@ export function runIngestPipeline(
     env: {
       ...process.env,
       // Stop Python from implicitly searching the CWD (repo root) for imports.
-      // Patched CPython builds (e.g. Ubuntu 24.04 python3.12) block imports
-      // resolving from the CWD "for security reasons" — this was crashing the
-      // chunk step on `import regex`. PYTHONPATH keeps `python -m pipelines.cli`
-      // resolvable explicitly. No-op on Python < 3.11.
+      // PYTHONPATH keeps `python -m pipelines.cli` resolvable explicitly.
+      // No-op on Python < 3.11.
       PYTHONSAFEPATH: "1",
       PYTHONPATH: `${projectRoot}${path.delimiter}${process.env.PYTHONPATH ?? ""}`,
+      // nltk >= 3.10 installs an import-hijack guard (inisec.py) that misfires
+      // when the venv is inside the project directory — its site-packages match
+      // its naive "path is under CWD" check and legit imports (regex) get
+      // blocked. Officially supported kill switch. Harmless on nltk < 3.10.
+      NLTK_DISABLE_IMPORT_SECURITY: "1",
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
