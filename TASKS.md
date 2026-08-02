@@ -22,14 +22,14 @@ All 12 Steps are **fully implemented with real provider code** in `pipelines/cli
 - [x] CLI entry point `pipelines/cli.py` with `ingest --key <b2-key>`
 - [x] **`probe`** — Real ffprobe → duration/codec/resolution from B2
 - [x] **`transcode-hls`** — Real ffmpeg HLS ladder (1080p→360p) + poster
-- [x] **`asr`** — faster-whisper large-v3 primary, OpenAI Whisper-API fallback
+- [x] **`asr`** — Deepgram Nova-3 API (free $200 credit, zero local install)
 - [x] **`scenes+keyframes`** — PySceneDetect ContentDetector + ffmpeg keyframe extraction
 - [x] **`vl-caption`** — GPT-4o-mini vision per keyframe
 - [x] **`chunk`** — NLTK punctuation + scene-boundary 20–45s packing
-- [x] **`embed`** — BGE-M3 dense + CLIP ViT-B/32 → LanceDB on B2 (s3fs), OpenAI fallback
+- [x] **`embed`** — BGE-M3 dense + CLIP ViT-B/32 → LanceDB on B2 (s3fs) + `index/<id>/segments.json` sidecar, mistral-embed API fallback
 - [x] **`slots`** — GPT-4o vision JSON-mode + MediaPipe face/hand reject
 - [x] **`brand-match`** — CLIP surface similarity scoring
-- [x] **`inpaint`** — Replicate FLUX.1-fill-pro + mask generation, GOVERANCE 365d lock
+- [x] **`inpaint`** — Google Gemini 2.5 Flash Image (Nano Banana) + mask generation, Pillow compositing fallback, GOVERNANCE 365d lock
 - [x] **`critic`** — GPT-4o-mini 5-point rubric, retry once, drop on fail
 - [x] **`manifest`** — Build JSON, upload to B2 with Object Lock COMPLIANCE 365d
 - [x] Per-step progress % emitted via `_log` for SSE

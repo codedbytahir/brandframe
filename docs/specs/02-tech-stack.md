@@ -41,7 +41,7 @@ Do **not** install a component library (MUI, Chakra, Ant, shadcn as a npm packag
 | `drizzle-kit` (dev) | ^0.28.1 | `db:push`, `db:studio`, `db:generate` |
 | `@libsql/client` | ^0.14.0 | SQLite client (works with local file and Turso cloud) |
 | `ai` (Vercel AI SDK) | ^4.0.36 | `streamText`, tool calls, chat UI hooks for chat-with-video |
-| `openai` | ^4.73.0 | Direct OpenAI client where Vercel SDK is overkill / embeddings |
+| `@ai-sdk/mistral` | ^1.2.8 | Mistral provider for Vercel AI SDK (chat, AI Overview, embeddings) |
 | `lancedb` | ^0.16.0 | Embedded vector DB opened via S3-compatible endpoint to B2 |
 | `apache-arrow` | (transitive) | Columnar format; listed in `serverExternalPackages` in next.config.ts |
 
@@ -58,15 +58,10 @@ Do **not** install a component library (MUI, Chakra, Ant, shadcn as a npm packag
 
 | Package | Version range | Why |
 |---|---|---|
-| `genblaze[core,s3]` | >=0.4.4,<0.7 | SDK umbrella; Pipeline/Step/Manifest/ObjectStorageSink/AgentLoop |
-| `genblaze[nvidia]` | | NVIDIA NIM adapter (Parakeet ASR, Llama/VL embeddings) |
-| `genblaze[gmicloud]` | | GMI / Black Forest Labs FLUX, Qwen-VL |
-| `genblaze[replicate]` | | Replicate fallback for FLUX / SD3 inpaint |
-| `genblaze[elevenlabs]` | | Voice dubs (optional post-v1) |
-| `genblaze[openai]`, `genblaze[google]` | | Whisper/GPT/Gemini fallbacks |
+| `genblaze[core,s3]` | >=0.6.0 | SDK umbrella; Pipeline/Step/Manifest/ObjectStorageSink/AgentLoop |
+| `google-genai` | >=1.0 | Gemini 2.5 Flash Image (Nano Banana) inpainting |
 | `boto3` | latest | Direct S3 calls where Genblaze S3 sink isn't enough (Object Lock, presign) |
-| `faster-whisper` | latest | ASR fallback when NVIDIA NIM unavailable |
-| `pyannote.audio` | latest | Voice activity detection for chunk boundaries (not diarization for v1) |
+| `requests` | latest | Mistral AI + Deepgram Nova-3 REST calls (no SDK weight) |
 | `scenedetect[opencv]` | latest | Scene cut detection for mid-roll score |
 | `opencv-python-headless` | latest | Frame extraction, MediaPipe pre-processing |
 | `mediapipe` | latest | Face/hand detection to reject unsafe ad slots |
@@ -78,9 +73,10 @@ Do **not** install a component library (MUI, Chakra, Ant, shadcn as a npm packag
 | `pillow` | latest | Image manip for inpaint compositing |
 | `ffmpeg-python` or subprocess | latest | HLS transcode, keyframe extraction (assume ffmpeg binary on PATH) |
 
-> **Note:** installing torch on a local machine in Pakistan can be slow. For the
-> demo recording, fall back to NVIDIA NIM / GMI / Replicate hosted calls wherever
-> possible and keep local models to a minimum (CLIP + BGE-M3 are small enough).
+> **Note:** installing torch on a local machine in Pakistan can be slow. The
+> canonical providers are all hosted free tiers (Mistral, Gemini, Deepgram), and
+> the pipeline auto-falls back to `mistral-embed` if local BGE-M3/CLIP can't load
+> — torch is optional.
 
 ## 4. Python vs Node boundary
 

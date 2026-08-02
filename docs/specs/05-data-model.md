@@ -269,7 +269,7 @@ Written by the manifest Step at `manifests/<videoId>/<runId>.json`. Version `1.0
       "disclosure": "AI Ad · Nestlé"
     }
   ],
-  "providers": ["nvidia","gmi","openai"],
+  "providers": ["mistral","deepgram","google"],
   "object_lock": {
     "mode": "COMPLIANCE",
     "retain_until": "<ISO-8601 now+365d>",

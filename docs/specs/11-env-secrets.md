@@ -21,23 +21,24 @@ All env vars are declared in `.env.example` and validated at boot.
 
 Public URL pattern derived from these: `https://f004.backblazeb2.com/file/<bucket>/<key>` (the `004` is the last segment of `B2_REGION` split on `-`).
 
-### AI providers (all optional — see fallback chains in §07)
+### AI providers (canonical stack — all free tier, no credit card)
 
 | Name | Used by | What for |
 |---|---|---|
-| `OPENAI_API_KEY` | Next.js chat/overview; Python Whisper/GPT-4o-mini fallback | LLM, Whisper ASR fallback, text-embeddings fallback |
-| `GEMINI_API_KEY` | Next.js LLM fallback; Python VL fallback | Gemini 2.0 Flash, Gemini-VL |
-| `NVIDIA_API_KEY` | Python (primary ASR + VL rerank + embeddings) | NVIDIA NIM: Parakeet ASR, Llama, NV-Embed |
-| `GMI_API_KEY` | Python (primary VL + inpaint) | GMI / Black Forest Labs: Qwen2.5-VL, FLUX.1-fill-pro |
-| `REPLICATE_API_TOKEN` | Python (fallback inpaint) | Replicate FLUX/SD3 inpaint models |
-| `ELEVENLABS_API_KEY` | Python (optional post-v1) | Voice dubs |
+| `MISTRAL_API_KEY` | Next.js (chat, AI Overview, query/segment embeddings); Python (vl-caption Pixtral, slot detection, embed fallback, critic) | `mistral-large-latest`, `pixtral-large-latest`, `mistral-embed` |
+| `GEMINI_API_KEY` | Python inpaint step | Gemini 2.5 Flash Image ("Nano Banana") via `google-genai` |
+| `DEEPGRAM_API_KEY` | Python asr step | Nova-3 speech-to-text ($200 free credit ≈ 430h) |
+
+**OpenAI, NVIDIA, Replicate, Groq, ElevenLabs were removed from the stack** —
+the pipeline and Node app call only Mistral, Gemini, and Deepgram.
 
 For the demo you **must** have at least:
 - `B2_*` set (the whole point is proving B2 + Genblaze).
-- `GMI_API_KEY` or `REPLICATE_API_TOKEN` (for the inpaint/slot hero demo).
-- `OPENAI_API_KEY` (easiest path for chat/overview embeddings fallback).
+- `MISTRAL_API_KEY` (search/chat overview + vision + embeddings all use it).
+- `GEMINI_API_KEY` (for the inpaint hero demo — without it, Pillow compositing still fills slots).
+- `DEEPGRAM_API_KEY` (ASR for real uploads).
 
-NVIDIA and Gemini are nice-to-haves that make the pipeline faster/cheaper but aren't strictly required if OpenAI + GMI are present.
+All three AI keys are free with no credit card (see §2).
 
 ### App config
 
@@ -65,21 +66,18 @@ NVIDIA and Gemini are nice-to-haves that make the pipeline faster/cheaper but ar
      - Type: Read and Write
      - Capabilities at minimum: `readFiles`, `writeFiles`, `deleteFiles`, `listBuckets`, `listFiles`, `writeBucketRetentions`, `writeFileRetentions`, `readBucketRetentions`, `readFileRetentions`
      - Save `keyID` and `applicationKey` — only shown once.
-- **OpenAI:** https://platform.openai.com/api-keys (GPT-4o-mini is cheap; embed a few $ for demo).
-- **GMI (Black Forest Labs FLUX + Qwen):** https://gmicloud.ai/ — apply for hackathon credits (Backblaze/GMI are partnered; first 270 submitters get credits per the hackathon rules).
-- **NVIDIA NIM:** https://build.nvidia.com/ — free credits for hackathon participants.
-- **Google Gemini:** https://aistudio.google.com/apikey (free tier generous).
-- **Replicate:** https://replicate.com/api-token (pay-per-use; cheap for a few FLUX calls).
-- **ElevenLabs:** https://elevenlabs.io/ (skip for v1).
+- **Mistral AI:** https://console.mistral.ai → API keys (free tier, no credit card).
+- **Google Gemini:** https://aistudio.google.com/apikey (free tier ≈ 500 image gens/day, no credit card).
+- **Deepgram:** https://deepgram.com — $200 free credits, no credit card.
 
 ## 3. Demo / offline mode
 
 When `B2_KEY_ID` is empty, `src/lib/env.ts` exports `isDemo = true`. In demo mode:
-- Upload widget shows "Demo mode" badge; uploads go to a local folder (skip), and a seeded demo video is used.
-- Search/chat/player use hard-coded demo data (see `lib/rag/search.ts` stub) and the public mux test stream.
-- No Python pipeline is spawned. Studio shows a banner: "Running in demo mode — set B2 keys in `.env.local` to enable real uploads."
+- The seeded 5-video corpus drives real BM25 search, chat (segment-grounded), playback (public test stream), captions, and the verify page (simulated manifest, clearly labeled).
+- The ad engine works end-to-end (intent overlays, mid-rolls, pause ads from seeded slots).
+- No Python pipeline is spawned; upload falls back to a simulated progression.
 
-This lets the UI be developed and the demo video be recorded even before B2 keys are available.
+Without MISTRAL_API_KEY, dense search degrades to BM25-only and chat/overview use deterministic segment-grounded fallbacks — same citation UX, no LLM.
 
 ## 4. .env.example
 
@@ -87,15 +85,12 @@ Keep `.env.example` in sync with this spec. It currently lists:
 ```
 B2_KEY_ID=
 B2_APP_KEY=
-B2_BUCKET=
+B2_BUCKET=brandframe-demo
 B2_REGION=us-west-004
 B2_ENDPOINT=s3.us-west-004.backblazeb2.com
-OPENAI_API_KEY=
+MISTRAL_API_KEY=
 GEMINI_API_KEY=
-NVIDIA_API_KEY=
-GMI_API_KEY=
-REPLICATE_API_TOKEN=
-ELEVENLABS_API_KEY=
+DEEPGRAM_API_KEY=
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 DATABASE_URL=file:./brandframe.db
 PIPELINE_VENV=.venv

@@ -57,14 +57,14 @@ Goal: the CLI can ingest a real video from B2 end-to-end with real providers (wi
 - [ ] Flesh out each Step in `pipelines/cli.py` using Genblaze `Step`/`Pipeline` primitives.
   - [ ] `probe` — ffprobe (via ffmpeg-python or subprocess), write durationMs.
   - [ ] `transcode-hls` — ffmpeg to HLS ladder + poster.jpg → B2.
-  - [ ] `asr` — NVIDIA Parakeet primary, faster-whisper fallback, word timestamps.
+  - [ ] `asr` — Deepgram Nova-3 API primary, utterance/word timestamps.
   - [ ] `scenes+keyframes` — PySceneDetect + ffmpeg keyframe extraction.
   - [ ] `vl-caption` — Qwen-VL/GMI captions per keyframe.
   - [ ] `chunk` — NLTK-punctuation-respecting ~20–45s chunks, scene-boundary preference.
   - [ ] `embed` — BGE-M3 dense+sparse + CLIP to LanceDB on B2 (s3fs).
   - [ ] `slots` — Qwen-VL JSON-mode + MediaPipe face/hand reject + spacing + policy.
   - [ ] `brand-match` — CLIP similarity vs pre-seeded brand embeddings.
-  - [ ] `inpaint` — FLUX.1-fill-pro primary, Replicate fallback.
+  - [ ] `inpaint` — Gemini 2.5 Flash Image primary, Pillow compositing fallback.
   - [ ] `critic` — Genblaze AgentLoop with 5-point rubric.
   - [ ] `manifest` — build manifest JSON, embed MP4 metadata, upload to B2 with Object Lock COMPLIANCE 365d.
 - [ ] Define the JSONL event shape as a typed dict; emit progress % per step.
@@ -97,7 +97,7 @@ Goal: a creator can upload a video from the UI and watch live progress until it'
 
 Goal: search returns real hits; AI Overview cites timestamps; chat streams with clickable chips; player jumps to timestamps and plays signed HLS from B2.
 
-- [ ] Wire `lib/rag/search.ts` to LanceDB: open `s3://bucket/index/segments.lance` with S3 storage options → BGE-M3 embeddings of query (OpenAI fallback for v0) → hybrid (0.5 dense + 0.2 BM25 + 0.3 CLIP) → top-20 → cross-encoder rerank (Transformers.js or NIM) → top-5.
+- [ ] Wire `lib/rag/search.ts` to LanceDB: open `s3://bucket/index/segments.lance` with S3 storage options → mistral-embed query vectors (BM25-only keyless fallback) → hybrid (0.5 dense + 0.2 BM25) → top-20 → token-F1 rerank → top-5.
 - [ ] `/search` RSC: call search, render result cards with timestamp chips, `<mark>` query in snippet, thumbnails signed.
 - [ ] AI Overview Card: take top-3 hits, call LLM via Vercel AI SDK `generateText` with citations as `[N](t:MM:SS)` links.
 - [ ] `/api/chat` route using Vercel AI SDK `streamText` with retrieval-augmented system prompt and `<ts ms=...>` tag format.
@@ -168,7 +168,7 @@ Goal: `/verify/[videoId]` is a green-check public page that demonstrably proves 
   6. 2:05–2:25 — verify page walkthrough (Object Lock/365d, before/after)
   7. 2:25–2:55 — B2 console walkthrough (prefixes, Object Lock, lifecycle), Genblaze manifest excerpt
   8. 2:55–3:00 — CTA, hackathon pitch
-- [ ] Devpost submission: title, tagline, description, screenshots, demo video link, repo link (add `b2genblaze` collaborator), providers list (Backblaze B2, Genblaze, GMI/FLUX, NVIDIA/Parakeet, OpenAI, Qwen-VL), built-with list.
+- [ ] Devpost submission: title, tagline, description, screenshots, demo video link, repo link (add `b2genblaze` collaborator), providers list (Backblaze B2, Genblaze, Mistral AI, Google Gemini 2.5 Flash Image, Deepgram Nova-3), built-with list.
 - [ ] File 3–5 high-quality Genblaze GitHub issues (feature requests, e.g., C2PA embedding, LanceDB s3fs example, ffmpeg Step primitive, AgentLoop VL rubric helper, ObjectStorageSink retention param).
 - [ ] Submit by Aug 3, 5PM EDT.
 

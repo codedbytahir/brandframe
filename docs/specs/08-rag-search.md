@@ -47,8 +47,8 @@ Brand vectors (stored in `index/brands.lance`):
 
 ### Fallback chain for text embeddings
 1.  `bge-m3` local (preferred; free; consistent).
-2.  NVIDIA NIM `nv-embedqa-e5-v5` (if bge-m3 fails to load on first run).
-3.  OpenAI `text-embedding-3-small` (last resort).
+2.  `mistral-embed` API (implemented — `step_embed` falls back to it, and the
+    Node query side uses it as primary via `src/lib/rag/embed.ts`).
 
 ### Query embedding at search time
 For a text query `q`:
@@ -85,9 +85,8 @@ search(q: string, opts?: { videoId?: string; limit?: number; brandScoped?: boole
 ```
 
 Pipeline:
-1.  **Embed query:** `dense_q`, `sparse_q` = bge-m3(q). For now call OpenAI
-    `text-embedding-3-small` as a v0 fallback since bge-m3 in Node is heavy;
-    swap to `@xenova/transformers` (WASM) for local embed when we have time.
+1.  **Embed query:** `dense_q` = `mistral-embed(q)` (1024-d, SQLite-cached in
+    `segment_embeddings`; keyless environments degrade to BM25-only).
 2.  **Dense search:** `table.search(dense_q, "dense_vec").nprobes(20).limit(20)` → top 20 with dense scores.
 3.  **BM25 search:** `table.search(q, query_type="fts", vector_column_name="text")` → top 20 BM20 hits (use BGE-M3 sparse weights if available, else tantivy BM25).
 4.  **Visual search (optional in v1):** skip unless query is visual; when added, `table.search(clip_q, "clip_vec").limit(20)`.
@@ -100,7 +99,7 @@ Pipeline:
 6.  **Filter:** if `opts.videoId` is given (chat mode), restrict to that video;
     apply content policy filter (don't return hidden videos).
 7.  **Rerank:** top-20 → `bge-reranker-v2-m3` cross-encoder (hosted via
-    Transformers.js in Node, or via NVIDIA NIM rerank endpoint). Take top-5.
+    Transformers.js in Node; v1 ships a deterministic token-F1 rerank (ADR-012). Take top-5.
 8.  **Return:** for each hit return `{ videoId, startMs, endMs, snippet, score, keyframeSignedUrl }`.
 
 ### "AI Overview" (on `/search` page, and at top of `/watch` sidebar)

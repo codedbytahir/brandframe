@@ -43,13 +43,13 @@ def test_step_result_fallback():
     sr = StepResult(
         step="asr",
         status="fallback",
-        provider="openai",
-        model="whisper-1",
+        provider="mistral",
+        model="voxtral-mini-latest",
         duration_ms=5000,
         data={"segments_count": 42},
     )
     assert sr.status == "fallback"
-    assert sr.provider == "openai"
+    assert sr.provider == "mistral"
 
 
 def test_step_result_failed():

@@ -52,7 +52,7 @@ Linear for v1 (no parallelism) for simplicity; Genblaze can fan out later if nee
 class StepResult:
     name: str                           # e.g. "asr", "embed"
     status: Literal["ok","fallback","failed"]
-    provider: str | None                # e.g. "nvidia", "openai", "local"
+    provider: str | None                # e.g. "mistral", "deepgram", "deterministic"
     model: str | None                   # e.g. "parakeet-tdt-1.1b", "bge-m3"
     latency_ms: int
     cost_usd: float
@@ -105,9 +105,8 @@ writes directly to SQLite if running locally) so Steps don't instantiate their o
 
 ### 4.3 `asr` (automatic speech recognition)
 - **Goal:** word-aligned transcript with timestamps.
-- **Primary (NVIDIA NIM):** `parakeet-tdt-1.1b` via `genblaze[nvidia]` (returns word-level timestamps).
-- **Fallback:** `faster-whisper large-v3` locally (CTranslate2).
-- **Final fallback:** OpenAI Whisper API.
+- **Primary:** Deepgram Nova-3 API (free $200 credit ≈ 430h, no local install; utterance-level timestamps).
+- **Fallback:** if utterances are absent, rebuild segments from the word-level array in the same response.
 - **Outputs:** list of segments (start_ms, end_ms, text, words[]); write as JSON to `assets/<id>/transcript.json`.
 - **DB:** no direct rows (used by chunk step).
 - **Critical:** yes — search/chat/overview depend on transcript.
@@ -120,8 +119,8 @@ writes directly to SQLite if running locally) so Steps don't instantiate their o
 
 ### 4.5 `vl-caption`
 - **Goal:** short (≤20 words) visual description of each keyframe (helps RAG recall for visual queries, e.g. "whiteboard diagram of flexbox").
-- **Primary:** Qwen2.5-VL-7B on GMI (`genblaze[gmicloud]`).
-- **Fallback:** GPT-4o-mini vision (OpenAI).
+- **Primary:** Mistral Pixtral (`pixtral-large-latest`) vision via `mistral_helpers.mistral_vision`.
+- **Fallback:** none (step is non-critical; pipeline continues).
 - **Outputs:** captions array keyed by keyframe seq; written to `assets/<id>/captions.json`.
 - **Critical:** no.
 
@@ -141,7 +140,7 @@ writes directly to SQLite if running locally) so Steps don't instantiate their o
   - Text dense: `BAAI/bge-m3` (1024-d) via FlagEmbedding (local).
   - Text sparse: BGE-M3 sparse weights (LexicalPluggable in LanceDB).
   - Visual: `openai/clip-vit-base-patch32` (512-d) via transformers locally (on the keyframe JPG for the chunk).
-- **Fallback for text dense:** OpenAI `text-embedding-3-small` (1536-d; down-project or use 1536-d LanceDB column).
+- **Fallback for text dense:** Mistral `mistral-embed` API (1024-d; also always written to the `index/<id>/segments.json` sidecar the Node app queries).
 - **Outputs:** LanceDB rows at `index/segments.lance` on B2 via s3fs.
 - **DB:** update segments (no new columns; row is already inserted in chunk step).
 - **Critical:** yes.
@@ -175,8 +174,8 @@ writes directly to SQLite if running locally) so Steps don't instantiate their o
 ### 4.10 `inpaint` (per approved slot)
 - **Goal:** produce a single inpainted pause-frame for each approved slot.
 - **Trigger in v1:** at ingest time for slots auto-approved because the seeded demo creator has pre-approved all seeded brands. In production this runs on creator approval (Server Action 1.7 triggers a smaller `inpaint-one` sub-pipeline).
-- **Primary:** FLUX.1-fill-pro via GMI (`genblaze[gmicloud]`), using the cropped bbox region, a prompt like `<brand name> <product> on a <surface>, <lighting> lighting, photorealistic, matching the scene`, and the original frame as image reference with mask derived from bbox.
-- **Fallback:** FLUX.1-fill on Replicate.
+- **Primary:** Google Gemini 2.5 Flash Image ("Nano Banana") via `google-genai`, using the cropped bbox region, a prompt like `<brand name> <product> on a <surface>, <lighting> lighting, photorealistic, matching the scene`, and the original frame as image reference with mask derived from bbox.
+- **Fallback:** Pillow compositing (deterministic, works with zero API keys).
 - **Output:** inpainted full-frame JPG at `assets/<id>/inpainted/<slotId>.jpg`.
 - **DB:** `ad_slots.afterKey = ...`, `ad_slots.status='filled'` only if critic passes.
 - **Critical:** no (slot dropped on failure).

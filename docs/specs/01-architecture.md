@@ -47,8 +47,8 @@
    │  └──────────────────┘                  └──────────────────────┘  │
    └──────────────────────────────────────────────────────────────────┘
                                        │
-                     HTTPS to provider APIs (OpenAI, NVIDIA, GMI,
-                     Replicate, ElevenLabs, Google Gemini)
+                     HTTPS to provider APIs (Mistral AI, Google
+                     Gemini, Deepgram — all free tier)
 ```
 
 ## 2. Components & responsibilities
@@ -86,7 +86,7 @@
 3.  **Webhook** sets video status to `processing` and spawns `pipelines.cli ingest --key …`.
 4.  **Pipeline Steps run (Python, Genblaze):**
     - `probe` — ffprobe duration/codec → update `videos.duration_ms`.
-    - `asr` — Parakeet-tdt-1.1b (NVIDIA NIM) with faster-whisper fallback → word-aligned transcript.
+    - `asr` — Deepgram Nova-3 API → utterance/word-aligned transcript.
     - `scenes` — PySceneDetect + keyframe extraction (ffmpeg) → Qwen-VL caption per keyframe → upload keyframes to `assets/<id>/keyframes/`.
     - `chunk+embed` — punctuation-respecting ~20–45s chunks, BGE-M3 (dense+sparse) + CLIP ViT-B/32 embeddings → write to LanceDB at `index/segments.lance` on B2 via s3fs; insert `segments` rows.
     - `slots` — Qwen-VL JSON-mode detection of inanimate-object bounding boxes → MediaPipe face/hand reject filter → CLIP brand-match against `brands/` embeddings → insert `ad_slots` rows (status `pending`).
@@ -131,14 +131,14 @@
     Never expose B2 credentials to the browser.
 2.  **B2 → Next:** webhook should verify B2 signing secret (v1: just verify `User-Agent` + IP range; v2: HMAC).
 3.  **Next → Python:** spawning local child process only; no network access to the Python runner.
-4.  **Next → Providers:** server-side only (OpenAI/NVIDIA/etc. keys never reach the browser).
+4.  **Next → Providers:** server-side only (Mistral/Gemini/Deepgram keys never reach the browser).
 5.  **Manifests:** WORM-locked — cannot be deleted or mutated for 365 days. This is the trust anchor for the /verify page.
 
 ## 6. Failure handling & fallbacks
 
-- **ASR:** NVIDIA Parakeet-TDT-1.1b (NIM) → faster-whisper large-v3 (local/Replicate) → whisper (OpenAI API).
+- **ASR:** Deepgram Nova-3 (free $200 credit, no local install).
 - **VL caption/slots:** Qwen2.5-VL-7B (GMI) → Qwen-VL-Max (Alibaba/DashScope if key present) → GPT-4o-mini vision.
-- **Inpaint:** FLUX.1-fill-pro (GMI) → FLUX.1-fill (Replicate) → Stable Diffusion 3 Inpaint.
-- **LLM (overview/chat):** OpenAI GPT-4o-mini → Gemini 2.0 Flash → Llama 3.1 70B (NVIDIA NIM).
-- **Embeddings:** BGE-M3 (FlagEmbedding local) → text-embedding-3-small (OpenAI) as fallback.
+- **Inpaint:** Google Gemini 2.5 Flash Image (Nano Banana) → Pillow compositing (keyless fallback).
+- **LLM (overview/chat):** Mistral Large (`mistral-large-latest`) via Vercel AI SDK.
+- **Embeddings:** Mistral `mistral-embed` (indexed via JSON sidecar; pipeline also tries local BGE-M3 first).
 - **If pipeline fails:** video.status = `failed`, SSE emits `pipeline.failed`, Studio shows retry button. Partially uploaded B2 objects under `tmp/` are cleaned up by lifecycle rule.

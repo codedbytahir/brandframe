@@ -61,9 +61,9 @@ No FastAPI. No extra servers. See `docs/specs/00-project-brief.md` for the thesi
 
 ### What requires env keys
 - Real uploads (B2_*).
-- Real pipeline runs (B2_* + at least GMI/OpenAI for inpaint+LLM).
+- Real pipeline runs (B2_* + MISTRAL_API_KEY + GEMINI_API_KEY + DEEPGRAM_API_KEY).
 - LanceDB on B2 (B2_*).
-- Vercel AI SDK chat/overview (OPENAI_API_KEY at minimum).
+- Real RAG chat/overview (MISTRAL_API_KEY; BM25/demo fallbacks work without).
 
 ## 3. Commands I know work
 
@@ -146,7 +146,7 @@ brandframe/
 
 ## 7. Active blockers / gotchas
 
-- **torch / transformers install can be slow in Pakistan** — prefer hosted provider calls (NVIDIA NIM, GMI, OpenAI) for the demo to keep local deps light.
+- **torch / transformers install can be slow in Pakistan** — prefer the hosted free-tier providers (Mistral, Gemini, Deepgram); local bge-m3/CLIP auto-falls back to mistral-embed.
 - **Bucket Object Lock must be enabled at CREATION time** — if the bucket already exists without it, delete and recreate it.
 - **lancedb and apache-arrow must be in `serverExternalPackages`** (already set in next.config.ts) or Next will try to bundle them for Edge and break.
 - **HLS.js requires "use client"** (browser-only). Don't import hls.js in a Server Component.

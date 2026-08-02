@@ -8,16 +8,10 @@ const envSchema = z.object({
   B2_REGION: z.string().default("us-west-004"),
   B2_ENDPOINT: z.string().default("s3.us-west-004.backblazeb2.com"),
 
-  // AI Providers (primary stack — all free tier)
-  MISTRAL_API_KEY: z.string().optional(), // https://console.mistral.ai
-  GEMINI_API_KEY: z.string().optional(), // https://aistudio.google.com
-  DEEPGRAM_API_KEY: z.string().optional(), // https://deepgram.com
-
-  // Legacy / fallback providers (kept for pipeline compat)
-  OPENAI_API_KEY: z.string().optional(),
-  NVIDIA_API_KEY: z.string().optional(),
-  REPLICATE_API_KEY: z.string().optional(),
-  GROQ_API_KEY: z.string().optional(),
+  // AI Providers (canonical stack — all free tier, no credit card)
+  MISTRAL_API_KEY: z.string().optional(), // https://console.mistral.ai — LLM/vision/embeddings
+  GEMINI_API_KEY: z.string().optional(), // https://aistudio.google.com — image generation/inpainting
+  DEEPGRAM_API_KEY: z.string().optional(), // https://deepgram.com — ASR (Nova-3)
 
   // App
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
