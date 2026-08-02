@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { videos } from "@/lib/db/schema";
+import { videos, segments } from "@/lib/db/schema";
 import { getPipelineLogs } from "@/lib/pipelines/logs";
 import { startIngestPipeline, isPipelineRunning } from "@/lib/pipelines/start";
+import { ingestSegmentsFromSidecar } from "@/lib/rag/ingest";
 
 /**
  * POST /api/pipelines/[videoId]
@@ -38,6 +39,20 @@ export async function POST(
     video.status === "ready" ||
     isPipelineRunning(videoId)
   ) {
+    // Backfill: a "ready" video with zero DB segments finished before the
+    // sidecar→SQLite ingest existed. Pull its sidecar from B2 so search,
+    // chat, and chapters can see it. Same trigger the client already calls.
+    if (video.status === "ready") {
+      const haveSegments = await db
+        .select({ id: segments.id })
+        .from(segments)
+        .where(eq(segments.videoId, videoId))
+        .limit(1);
+      if (haveSegments.length === 0) {
+        const indexedSegments = await ingestSegmentsFromSidecar(videoId);
+        return NextResponse.json({ status: video.status, videoId, indexedSegments });
+      }
+    }
     return NextResponse.json({ status: video.status, videoId });
   }
 

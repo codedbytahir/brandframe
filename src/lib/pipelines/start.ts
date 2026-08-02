@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { videos } from "@/lib/db/schema";
 import { runIngestPipeline } from "@/lib/pipelines/run";
 import { addPipelineLog } from "@/lib/pipelines/logs";
+import { ingestSegmentsFromSidecar } from "@/lib/rag/ingest";
 
 /** Track running pipelines to prevent duplicate starts */
 const runningPipelines = new Set<string>();
@@ -74,6 +75,36 @@ export async function startIngestPipeline(
         JSON.stringify({ event: "complete", data: result })
       );
       const finalStatus = result.success ? "ready" : "failed";
+      // Index the pipeline's B2 sidecar into SQLite so the video shows up in
+      // search/chat/chapters. Failure here must not sink a successful ingest.
+      if (result.success) {
+        try {
+          const indexed = await ingestSegmentsFromSidecar(videoId);
+          addPipelineLog(
+            videoId,
+            JSON.stringify({
+              event: "progress",
+              step: "index",
+              status: "completed",
+              progress: 100,
+              message:
+                indexed > 0
+                  ? `Indexed ${indexed} segments into DB (search + chat)`
+                  : "No index sidecar found — search will use DB segments only",
+            })
+          );
+        } catch (err) {
+          console.error("Sidecar ingest failed:", err);
+          addPipelineLog(
+            videoId,
+            JSON.stringify({
+              event: "raw",
+              source: "stdout",
+              line: `[index] sidecar ingest failed: ${String(err).slice(0, 200)}`,
+            })
+          );
+        }
+      }
       try {
         await db
           .update(videos)
