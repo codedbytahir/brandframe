@@ -267,3 +267,9 @@ mux test stream, only 1 seeded video. Completed Phase 4 for real:
 - Wrote MEMORY.md (this), DECISIONS.md, AGENTS.md.
 - Did **not** run npm install or pip install (next session task); no real B2 wiring; no real AI calls yet.
 - **Next session should:** run `npm install`, `npm run db:push`, add missing shadcn primitives, mount ThemeProvider+Toaster, verify app boots; then start Phase 2 (real Python Steps) or Phase 3 (API routes) depending on which is more valuable for momentum.
+
+### 2026-08-02 (ads fix) — ad chain now works on short/synthetic videos (this agent)
+- Root causes for "0 ads on a 1-min test video": (1) `compute_breaks` hard caps (first 60s + >=180s apart) make short clips mathematically ineligible; (2) Pixtral slot detection finds no surfaces on synthetic footage → chain dies at 0 slots; (3) manifest placements never reached the DB (same class of gap as segments).
+- Fixes: duration-adaptive break caps in `pipelines/cli.py` + mirrored in `src/lib/ads/cues.ts` (min(60s, dur*0.15) / min(180s, max(30s, dur*0.25))); deterministic fallback slots (blank_sign, tagged `fallback:true`) in `step_slots` when Pixtral finds 0; `ingest.ts` + `ingestBreaksFromSidecar` / `ingestPlacementsFromManifest` / `ingestPipelineArtifacts` — placements land in `ad_slots` as `pending` (approval queue) or `rejected` (critic fail + reason); start.ts completion + POST backfill route call the combined ingest.
+- Verified: 8/8 pytest; synthetic 60s fixture → break @22.5s score 87; 10-min fixture keeps 60s/180s bounds (94s/274s/454s); tsx fixture → cues return 1 midroll (DemoCola) on 60s video, pending/rejected slot statuses correct, unknown-brand placement skipped; typecheck+build green.
+- Note: critic (Mistral, pass >=3.5) may still reject composites on synthetic slides — those land as `rejected` with reason in the queue, visible in Studio.

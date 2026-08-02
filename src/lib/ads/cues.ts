@@ -76,6 +76,16 @@ async function loadBreaks(videoId: string): Promise<Array<{ id: string; ms: numb
   return [];
 }
 
+/** Max segment end = effective duration (pipeline stops writing DB duration). */
+async function getDurationMs(videoId: string): Promise<number | null> {
+  const rows = await db
+    .select({ endMs: segments.endMs })
+    .from(segments)
+    .where(eq(segments.videoId, videoId));
+  if (rows.length === 0) return null;
+  return rows.reduce((m, r) => Math.max(m, r.endMs), 0);
+}
+
 /** One brand per video (demo simplification, spec §3.2): the brand already
  * attached to the video's slots, else a low-bar intent match on the video's
  * topics, else the first opted-in brand. */
@@ -162,15 +172,25 @@ export async function buildAdCues(videoId: string): Promise<AdCuePlan> {
   const breaks = await loadBreaks(videoId);
   const midrollBrand = await pickVideoBrand(videoId, slotBrands);
 
+  // Duration-adaptive bounds: the long-form defaults (60s / 180s) exclude
+  // short clips entirely — scale proportionally (mirrors compute_breaks).
+  const durationMs = await getDurationMs(videoId);
+  const firstAllowed = durationMs
+    ? Math.min(FIRST_ALLOWED_MS, Math.floor(durationMs * 0.15))
+    : FIRST_ALLOWED_MS;
+  const spacing = durationMs
+    ? Math.min(MIDROLL_SPACING_MS, Math.max(30_000, Math.floor(durationMs * 0.25)))
+    : MIDROLL_SPACING_MS;
+
   const midrolls: MidrollCue[] = [];
   if (midrollBrand) {
     const eligible = breaks
-      .filter((b) => b.ms >= FIRST_ALLOWED_MS && b.score >= BREAK_THRESHOLD_0_100)
+      .filter((b) => b.ms >= firstAllowed && b.score >= BREAK_THRESHOLD_0_100)
       .sort((a, b) => b.score - a.score);
 
     const accepted: typeof eligible = [];
     for (const brk of eligible) {
-      if (!accepted.every((a) => Math.abs(a.ms - brk.ms) >= MIDROLL_SPACING_MS)) continue;
+      if (!accepted.every((a) => Math.abs(a.ms - brk.ms) >= spacing)) continue;
       // Pause ad wins within ±10s (spec §3.5: never stacked)
       if (pauseAds.some((p) => Math.abs(p.ms - brk.ms) < CONFLICT_WINDOW_MS)) continue;
       accepted.push(brk);

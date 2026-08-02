@@ -672,7 +672,9 @@ def step_embed(video_id: str, chunk_result: StepResult) -> StepResult:
 #         + w3 * topic_similarity_drop  (1 - Jaccard(before-window, after-window))
 #         - w4 * mid_sentence_penalty
 # Weights: w1=0.4, w2=0.3, w3=0.2, w4=0.5. Eligibility: score01 >= 0.55 (stored
-# as int 0-100 in DB, threshold 55). Caps: none in first 60s, >=180s apart.
+# as int 0-100 in DB, threshold 55). Caps: none in first 60s, >=180s apart —
+# both scaled down proportionally for short clips (a ~60s demo video would
+# otherwise be mathematically ineligible for any break at all).
 
 BREAK_WEIGHTS = {"w1": 0.4, "w2": 0.3, "w3": 0.2, "w4": 0.5}
 BREAK_THRESHOLD = 0.55
@@ -698,6 +700,13 @@ def compute_breaks(
     Each break: {"timestamp_ms": int, "score": int 0-100, "reason": str}
     """
     w = BREAK_WEIGHTS
+
+    # Duration-adaptive caps: the long-form defaults (no breaks in first 60s,
+    # >=180s apart) make short clips mathematically ineligible for any break,
+    # so scale them down proportionally (10-min videos keep the defaults).
+    first_allowed = min(BREAK_FIRST_ALLOWED_MS, int(duration_ms * 0.15))
+    min_spacing = min(BREAK_MIN_SPACING_MS, max(30_000, int(duration_ms * 0.25)))
+    tail_guard = min(5_000, int(duration_ms * 0.08))
 
     # Scene cut times (cut happens at a scene's start)
     cuts = [sc.get("start_ms", 0) for sc in scenes if sc.get("start_ms", 0) > 0]
@@ -757,7 +766,7 @@ def compute_breaks(
 
     scored = []
     for t, gap in merged:
-        if t < BREAK_FIRST_ALLOWED_MS or t > duration_ms - 5000:
+        if t < first_allowed or t > duration_ms - tail_guard:
             continue
         score01 = (
             w["w1"] * scene_strength(t)
@@ -769,11 +778,11 @@ def compute_breaks(
         if score01 >= BREAK_THRESHOLD:
             scored.append((t, score01))
 
-    # Greedy selection: highest score first, >=180s from any accepted break
+    # Greedy selection: highest score first, >=min_spacing from any accepted break
     scored.sort(key=lambda x: -x[1])
     accepted: list[tuple[int, float]] = []
     for t, s in scored:
-        if all(abs(t - at) >= BREAK_MIN_SPACING_MS for at, _ in accepted):
+        if all(abs(t - at) >= min_spacing for at, _ in accepted):
             accepted.append((t, s))
     accepted.sort()
 
@@ -933,13 +942,32 @@ def step_slots(video_id: str, scenes_result: StepResult) -> StepResult:
         log("progress", step="slots", status="running", progress=90,
             message=f"MediaPipe unavailable ({exc}), skipping rejection")
 
+    # Deterministic fallback: footage with no detectable surfaces (synthetic
+    # or minimal demo clips) would otherwise end the whole ad chain at 0.
+    # Generate one generic "blank_sign" slot per scene (max 3), framed away
+    # from typical face regions, clearly tagged as fallback for the manifest.
+    if len(detected_slots) == 0 and len(scenes) > 0:
+        log("progress", step="slots", status="running", progress=91,
+            message="No surfaces via Pixtral — generating deterministic fallback slots...")
+        for sc in scenes[:3]:
+            detected_slots.append({
+                "id": f"slot_{uuid.uuid4().hex[:8]}",
+                "timestamp_ms": sc["midpoint_ms"],
+                "surface": "blank_sign",
+                "bbox": [300, 250, 700, 750],
+                "confidence": 0.45,
+                "fallback": True,
+            })
+
+    any_fallback = any(s.get("fallback") for s in detected_slots)
     result = StepResult(
         step="slots", status="success", provider="mistral", model="pixtral-large-latest",
         duration_ms=int((time.time() - t0) * 1000),
         data={"slots_count": len(detected_slots), "slots": detected_slots},
     )
     log("progress", step="slots", status="completed", progress=92,
-        message=f"{len(detected_slots)} ad slots detected via Pixtral")
+        message=f"{len(detected_slots)} ad slots detected via Pixtral"
+                + (" (deterministic fallback)" if any_fallback else ""))
     return result
 
 

@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { videos, segments } from "@/lib/db/schema";
 import { getPipelineLogs } from "@/lib/pipelines/logs";
 import { startIngestPipeline, isPipelineRunning } from "@/lib/pipelines/start";
-import { ingestSegmentsFromSidecar } from "@/lib/rag/ingest";
+import { ingestPipelineArtifacts } from "@/lib/rag/ingest";
 
 /**
  * POST /api/pipelines/[videoId]
@@ -49,8 +49,14 @@ export async function POST(
         .where(eq(segments.videoId, videoId))
         .limit(1);
       if (haveSegments.length === 0) {
-        const indexedSegments = await ingestSegmentsFromSidecar(videoId);
-        return NextResponse.json({ status: video.status, videoId, indexedSegments });
+        const indexed = await ingestPipelineArtifacts(videoId);
+        return NextResponse.json({
+          status: video.status,
+          videoId,
+          indexedSegments: indexed.segments,
+          indexedBreaks: indexed.breaks,
+          indexedPlacements: indexed.placements,
+        });
       }
     }
     return NextResponse.json({ status: video.status, videoId });

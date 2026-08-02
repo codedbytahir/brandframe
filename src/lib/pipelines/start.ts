@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { videos } from "@/lib/db/schema";
 import { runIngestPipeline } from "@/lib/pipelines/run";
 import { addPipelineLog } from "@/lib/pipelines/logs";
-import { ingestSegmentsFromSidecar } from "@/lib/rag/ingest";
+import { ingestPipelineArtifacts } from "@/lib/rag/ingest";
 
 /** Track running pipelines to prevent duplicate starts */
 const runningPipelines = new Set<string>();
@@ -79,7 +79,7 @@ export async function startIngestPipeline(
       // search/chat/chapters. Failure here must not sink a successful ingest.
       if (result.success) {
         try {
-          const indexed = await ingestSegmentsFromSidecar(videoId);
+          const idx = await ingestPipelineArtifacts(videoId);
           addPipelineLog(
             videoId,
             JSON.stringify({
@@ -87,10 +87,7 @@ export async function startIngestPipeline(
               step: "index",
               status: "completed",
               progress: 100,
-              message:
-                indexed > 0
-                  ? `Indexed ${indexed} segments into DB (search + chat)`
-                  : "No index sidecar found — search will use DB segments only",
+              message: `Indexed into DB: ${idx.segments} segments, ${idx.breaks} breaks, ${idx.placements} placements (search/chat/ads/approvals)`,
             })
           );
         } catch (err) {
