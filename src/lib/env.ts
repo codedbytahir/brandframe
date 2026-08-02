@@ -5,8 +5,8 @@ const envSchema = z.object({
   B2_KEY_ID: z.string().optional(),
   B2_APP_KEY: z.string().optional(),
   B2_BUCKET: z.string().optional(),
-  B2_REGION: z.string().default("us-west-004"),
-  B2_ENDPOINT: z.string().default("s3.us-west-004.backblazeb2.com"),
+  B2_REGION: z.string().default("us-east-005"),
+  B2_ENDPOINT: z.string().default("s3.us-east-005.backblazeb2.com"),
 
   // AI Providers (canonical stack — all free tier, no credit card)
   MISTRAL_API_KEY: z.string().optional(), // https://console.mistral.ai — LLM/vision/embeddings
