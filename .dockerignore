@@ -1,0 +1,14 @@
+node_modules
+.next
+.venv
+brandframe.db
+.git
+*.tsbuildinfo
+*.patch
+.env
+.env.*
+!.env.example
+docs
+scripts/dev-*.mts
+demo-assets
+demo-voiceover
