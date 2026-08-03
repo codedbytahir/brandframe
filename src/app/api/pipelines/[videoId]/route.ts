@@ -11,7 +11,7 @@ import { ingestPipelineArtifacts } from "@/lib/rag/ingest";
  * Trigger the ingest pipeline for a video after upload completes.
  */
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ videoId: string }> }
 ) {
   const { videoId } = await params;
@@ -31,6 +31,19 @@ export async function POST(
       { error: "Video has no B2 key" },
       { status: 400 }
     );
+  }
+
+  // Force-restart a dead run: if the host slept/restarted mid-ingest (e.g.
+  // Codespaces idle suspend), the child process is gone but the row is stuck
+  // in "processing"/"uploading" forever. ?force=1 clears the zombie.
+  const force = req.nextUrl.searchParams.get("force") === "1";
+  if (
+    force &&
+    !isPipelineRunning(videoId) &&
+    video.status !== "ready"
+  ) {
+    await startIngestPipeline(videoId, video.b2Key);
+    return NextResponse.json({ status: "processing", videoId, forced: true });
   }
 
   // If already processing or ready, return current status without re-spawning
